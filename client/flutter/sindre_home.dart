@@ -50,7 +50,8 @@ class _SindreHomeState extends State<SindreHome> {
   void initState() {
     super.initState();
     if (host) {
-      // 使用密码自动验证，避免弹出额外的人工接听窗口。
+      // 隐藏连接管理窗口，并使用密码自动验证。
+      gFFI.serverModel.hideCm = true;
       unawaited(gFFI.serverModel.setApproveMode('password'));
       unawaited(gFFI.serverModel.setVerificationMethod(kUseTemporaryPassword));
     }
