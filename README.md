@@ -19,6 +19,6 @@ Android 优先验证高通骁龙、联发科天玑/Helio 64 位设备。不支�
 - 如需指定中继地址，设置 `SINDREDESK_RELAY=remote.example.com:21117`。
 - 服务端需要 TCP 21115–21117、UDP 21116。上游可能同时监听 WebSocket 端口；不需要网页客户端时不要对外开放这些端口。
 
-运行器当前未进行真实 hbbs/hbbr 集成测试；不得作为已通过安全验收的正式发布。客户端尚未修改上游界面和权限。
+运行 `bash scripts/build-server-release.sh` 可使用 SHA-256 固定校验的官方服务端载荷构建 Linux x64 运行器，再运行 `bash scripts/test-server-integration.sh` 执行真实进程集成测试。GitHub Actions 的 Server integration 工作流在测试通过后上传 `SindreDeskServer-linux-x64-ci`，其中包含运行器与 `SHA256SUMS`。解压后运行 `sha256sum -c SHA256SUMS`、`chmod +x SindreDeskServer`，即可启动测试。CI 产物不是正式发布，尚未验证远程桌面协议和终端安全验收。
 
 详见 [架构及验收要求](docs/architecture.md)。上游 [RustDesk](https://github.com/rustdesk/rustdesk) 与 [RustDesk Server](https://github.com/rustdesk/rustdesk-server) 使用 AGPL-3.0；发布时必须同时满足源码提供和版权声明义务。
