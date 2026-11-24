@@ -167,7 +167,7 @@ Windows UAC、锁屏、无人值守服务以及 Linux Wayland 授权、桌面环
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
 
-工作流在客户端六项全部成功后上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。分别提供 SHA256SUMS-clients 和 SHA256SUMS-server。下载前确认对应任务成功，调试签名 APK 仅供测试。CI Android APK 使用调试签名，并检查 ZIP 中原生库仅包含 arm64-v8a 及 librustdesk.so。
+工作流在客户端六项全部成功后上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。分别提供 SHA256SUMS-clients 和 SHA256SUMS-server。下载前确认对应任务成功，调试签名 APK 仅供测试。未配置正式签名的预发行版 APK 使用调试签名；稳定版必须使用正式签名。构建检查 APK 签名、角色包名及 arm64-v8a 原生库。
 
 ## 8. 开发与验收
 
@@ -198,6 +198,16 @@ bash scripts/test-server-integration.sh
 
 ### 服务器连接状态
 
-两端首页底部统一显示未配置、连接中、已连接、未就绪。状态来自 RustDesk 原生 Rendezvous 状态，不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
+两端首页底部显示服务器状态。Host 使用 RustDesk 原生注册状态，Client 使用 TCP 可达性检测；两者均不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
 
 完整验收记录模板见 [发布验收](docs/acceptance.md)，第三方来源见 [声明](THIRD_PARTY_NOTICES.md)，版本变更见 [CHANGELOG](CHANGELOG.md)。
+
+### 控制端状态说明
+
+Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显示服务器可达/不可达/检测中；可达不表示公钥认证成功。Host 继续显示原生注册状态。每 5 秒检测，连接超时 3 秒。
+
+### 正式发布配置
+
+预发行版可以使用临时调试签名；稳定版必须在仓库 Actions Secrets 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，并在 Actions Variables 配置 `WINDOWS_ENGINE_SHA256`（可信来源核对的 64 位十六进制 SHA256）。签名配置不完整或引擎校验不一致时构建失败。不要提交证书、密码或私钥。正式签名与调试签名不同，旧测试 APK 可能需要先卸载。签名和哈希配置不是实机验收的替代。
+
+发布前先运行 `python -m unittest discover -s tests -v`。Release 客户端工作流首先检查签名配置和引擎哈希格式，再启动耗时构建，以避免配置缺失导致六个平台重复编译。

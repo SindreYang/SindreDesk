@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -46,6 +47,9 @@ class _SindreHomeState extends State<SindreHome> {
   Timer? _timer;
   bool _busy = false;
   String _message = '';
+  bool? _reachable;
+  int _probeGeneration = 0;
+  bool _probing = false;
 
   bool get host => bind.isIncomingOnly();
   bool get configured =>
@@ -60,6 +64,12 @@ class _SindreHomeState extends State<SindreHome> {
       gFFI.serverModel.hideCm = false;
       unawaited(gFFI.serverModel.setApproveMode('password'));
       unawaited(gFFI.serverModel.setVerificationMethod(kUseTemporaryPassword));
+    }
+    if (!host) {
+      unawaited(_probeServer());
+      _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+        unawaited(_probeServer());
+      });
     }
     if (host && isDesktop) {
       gFFI.serverModel.fetchID();
@@ -78,12 +88,48 @@ class _SindreHomeState extends State<SindreHome> {
     super.dispose();
   }
 
+  // 控制端不注册为被控设备；仅探测私服 TCP 可达性。
+  Future<void> _probeServer() async {
+    if (_probing || !mounted || host) return;
+    if (!configured) {
+      if (_reachable != null) setState(() => _reachable = null);
+      return;
+    }
+    final address = bind.mainGetOptionSync(key: 'custom-rendezvous-server').trim();
+    final generation = _probeGeneration;
+    _probing = true;
+    bool reachable = false;
+    Socket? socket;
+    try {
+      socket = await Socket.connect(address, 21116,
+          timeout: const Duration(seconds: 3));
+      reachable = true;
+    } catch (_) {
+      reachable = false;
+    } finally {
+      socket?.destroy();
+      _probing = false;
+      if (mounted && generation == _probeGeneration &&
+          address == bind.mainGetOptionSync(key: 'custom-rendezvous-server').trim()) {
+        setState(() => _reachable = reachable);
+      }
+    }
+  }
+
   Future<void> _settings() async {
     final saved = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => const _ServerSettings(),
     );
-    if (saved == true && mounted) setState(() => _message = '');
+    if (mounted) {
+      _probeGeneration++;
+      setState(() {
+        _reachable = null;
+        if (saved == true) _message = '';
+      });
+      if (!host) unawaited(_probeServer());
+    }
   }
 
   Future<void> _connect() async {
@@ -133,13 +179,15 @@ class _SindreHomeState extends State<SindreHome> {
     animation: gFFI.serverModel,
     builder: (context, _) {
       final status = gFFI.serverModel.connectStatus;
-      final ready = configured && status > 0;
+      final ready = configured && (host ? status > 0 : _reachable == true);
+      final failed = host ? status < 0 : _reachable == false;
       final label = !configured ? '未配置服务器' :
-          ready ? '服务器已连接' :
-          status < 0 ? '服务器未就绪' : '正在连接服务器';
+          ready ? (host ? '服务器已连接' : '服务器可达') :
+          failed ? (host ? '服务器未就绪' : '服务器不可达') :
+          host ? '正在连接服务器' : '正在检测服务器';
       final color = ready ? Colors.green :
           !configured ? Theme.of(context).colorScheme.outline :
-          status < 0 ? Theme.of(context).colorScheme.error : Colors.orange;
+          failed ? Theme.of(context).colorScheme.error : Colors.orange;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Row(children: [
@@ -230,6 +278,7 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
   void initState() {
     super.initState();
     gFFI.serverModel.checkAndroidPermission();
+    mobile.checkService();
     _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       gFFI.serverModel.fetchID();
     });
@@ -243,7 +292,6 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
 
   @override
   Widget build(BuildContext context) {
-    mobile.checkService();
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: SingleChildScrollView(
@@ -325,13 +373,22 @@ class _ServerSettingsState extends State<_ServerSettings> {
       await bind.mainSetOption(key: 'relay-server', value: oldRelay);
       await bind.mainSetOption(key: 'api-server', value: oldApi);
       await bind.mainSetOption(key: 'key', value: oldKey);
+      if (bind.mainGetOptionSync(key: 'custom-rendezvous-server') != oldServer ||
+          bind.mainGetOptionSync(key: 'key') != oldKey ||
+          bind.mainGetOptionSync(key: 'relay-server') != oldRelay ||
+          bind.mainGetOptionSync(key: 'api-server') != oldApi) {
+        throw StateError('恢复配置未生效');
+      }
     }
     try {
       // 先清空旧公钥，切换地址期间禁止新连接。
       await bind.mainSetOption(key: 'key', value: '');
       final ok = await setServerConfig(null, null,
         ServerConfig(idServer: server, key: key));
-      if (!ok) await restore();
+      if (!ok || bind.mainGetOptionSync(key: 'custom-rendezvous-server') != server ||
+          bind.mainGetOptionSync(key: 'key') != key) {
+        throw StateError('配置未完整保存');
+      }
       if (!mounted) return;
       if (ok) {
         Navigator.of(context).pop(true);

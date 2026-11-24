@@ -13,7 +13,31 @@ env:
   VCPKG_COMMIT: "120deac3062162151622ca4860575a33844ba10b"
   CARGO_INCREMENTAL: "0"
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check release prerequisites
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          ENGINE_SHA256: ${{ vars.WINDOWS_ENGINE_SHA256 }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" || "$PRERELEASE" != true ]]; then
+            [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] || { echo 'Android signing configuration missing or incomplete'; exit 1; }
+          fi
+          if [[ -n "$ENGINE_SHA256" || "$PRERELEASE" != true ]]; then
+            [[ "$ENGINE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Windows engine SHA256 missing or invalid'; exit 1; }
+          fi
+      - run: python -m unittest discover -s tests -v
   bridge:
+    needs: preflight
     runs-on: ubuntu-22.04
     timeout-minutes: 50
     steps:
@@ -116,6 +140,11 @@ jobs:
           patch="$PWD/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
           sdk="$(dirname "$(dirname "$(command -v flutter)")")"
           git -C "$sdk" apply "$patch"
+      - name: Analyze SindreDesk UI
+        run: |
+          cd flutter
+          flutter pub get
+          dart analyze lib/sindre/sindre_home.dart
       - name: Set up JDK 17
         if: matrix.platform == 'android'
         uses: actions/setup-java@v6
@@ -188,10 +217,23 @@ jobs:
       - name: Install custom RustDesk Flutter engine (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
+        env:
+          ENGINE_SHA256: ${{ vars.WINDOWS_ENGINE_SHA256 }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source -Parent) -Parent
           flutter precache --windows
           Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          $actual = (Get-FileHash windows-x64-release.zip -Algorithm SHA256).Hash
+          if ($env:ENGINE_SHA256) {
+            if ($env:ENGINE_SHA256 -notmatch '^[0-9a-fA-F]{64}$' -or $actual -ne $env:ENGINE_SHA256) {
+              throw "Windows engine SHA256 mismatch"
+            }
+          } elseif ($env:PRERELEASE -ne "true") {
+            throw "Stable releases require WINDOWS_ENGINE_SHA256"
+          } else {
+            Write-Warning "Unpinned Windows engine for prerelease only: $actual"
+          }
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           $engineDir = Join-Path $flutterRoot "bin/cache/artifacts/engine/windows-x64-release"
           New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
@@ -206,6 +248,25 @@ jobs:
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
           test -s "flutter/build/windows/x64/runner/Release/$app.exe"
           test -s flutter/build/windows/x64/runner/Release/librustdesk.dll
+      - name: Configure Android signing
+        if: matrix.platform == 'android'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]]; then
+            [[ "$PRERELEASE" == true ]] || { echo "Stable releases require Android signing secrets"; exit 1; }
+            sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
+          else
+            [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] || { echo "Incomplete signing configuration"; exit 1; }
+            umask 077
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > flutter/android/app/sindre-release.jks
+            python "$GITHUB_WORKSPACE/scripts/write-android-signing.py" flutter/android/key.properties
+          fi
       - name: Compile Android ARM64 Rust and Flutter
         if: matrix.platform == 'android'
         env:
@@ -220,17 +281,23 @@ jobs:
           mkdir -p "$jni"
           cp target/aarch64-linux-android/release/liblibrustdesk.so "$jni/librustdesk.so"
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$jni/"
-          # CI-only signing: never treat this APK as a production release.
-          sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
           sed -i 's/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g' flutter/android/gradle.properties
           cd flutter
           flutter pub get
           flutter build apk --release --target-platform android-arm64
           apk=build/app/outputs/flutter-apk/app-release.apk
           test -s "$apk"
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$tools/apksigner" verify "$apk"
+          package=$("$tools/aapt" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          test "$package" = "com.sindre.desk.${{ matrix.role }}"
           python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
           cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
+      - name: Remove Android signing material
+        if: always() && matrix.platform == 'android'
+        working-directory: .
+        run: rm -f "upstream/${{ matrix.role }}/flutter/android/app/sindre-release.jks" "upstream/${{ matrix.role }}/flutter/android/key.properties"
       - uses: actions/upload-artifact@v7
         if: matrix.platform == 'linux'
         with:
