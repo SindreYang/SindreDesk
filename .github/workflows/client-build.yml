@@ -102,6 +102,11 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            upstream/${{ matrix.role }} -> target
+          key: ${{ matrix.platform }}-${{ matrix.role }}
       - name: Apply pinned upstream Flutter SDK patch
         run: |
           patch="$PWD/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
