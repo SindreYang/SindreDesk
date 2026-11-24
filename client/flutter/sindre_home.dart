@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../common.dart';
 import '../models/platform_model.dart';
+import '../models/server_model.dart' show kUseTemporaryPassword;
 import '../mobile/pages/server_page.dart' as mobile;
 
 bool validPublicKey(String value) {
@@ -48,6 +49,11 @@ class _SindreHomeState extends State<SindreHome> {
   @override
   void initState() {
     super.initState();
+    if (host) {
+      // 使用密码自动验证，避免弹出额外的人工接听窗口。
+      unawaited(gFFI.serverModel.setApproveMode('password'));
+      unawaited(gFFI.serverModel.setVerificationMethod(kUseTemporaryPassword));
+    }
     if (host && isDesktop) {
       gFFI.serverModel.fetchID();
       _timer = Timer.periodic(const Duration(seconds: 2), (_) {
