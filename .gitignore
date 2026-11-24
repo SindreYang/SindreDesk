@@ -1,0 +1,12 @@
+/upstream/
+/dist/
+/server/payload/hbbs
+/server/payload/hbbr
+*.apk
+*.AppImage
+id_ed25519
+id_ed25519.pub
+*.db
+*.db-shm
+*.db-wal
+/server/server
