@@ -1,29 +1,40 @@
 # SindreDesk
 
-基于 RustDesk 的极简、自托管远程桌面。项目处于开发阶段，平台构建和设备连接尚未全部验收。
+基于 RustDesk 的极简、自托管远程桌面。控制端与被控端独立安装，用户只需配置私有服务器地址、公钥以及连接码和临时密码。
 
-## 支持范围
+> 当前为开发测试版，不是生产稳定版。Windows、Linux 两种客户端角色已通过上一轮编译，Linux 服务端已通过真实进程集成测试；Android ARM64 打包冲突已修正，仍待新版本构建验证。所有平台的真实远程会话仍待验收。
 
-| 系统 | Host 被控端 | Client 控制端 | Server |
-|---|---:|---:|---:|
-| Windows 10/11 x64 | 构建验证中 | 构建验证中 | 不支持 |
-| Linux x64 | 构建验证中 | 构建验证中 | 支持 |
-| Android arm64-v8a | 构建验证中 | 构建验证中 | 不支持 |
+## 1. 选择安装包
 
-Android 目标设备为主流高通 Snapdragon 与联发科 Dimensity / Helio 64 位机型，使用 Android 标准屏幕采集、无障碍和 MediaCodec 接口。不支持 Android 32 位、Linux ARM64、Windows ARM64、macOS、iOS。
+| 平台 | Host（被控端） | Client（控制端） | Server（服务端） |
+| --- | --- | --- | --- |
+| Windows 10/11 x64 | SindreDeskHost.exe | SindreDeskClient.exe | 不支持 |
+| Linux x64 | sindredesk-host | sindredesk-client | SindreDeskServer |
+| Android arm64-v8a | SindreDeskHost.apk | SindreDeskClient.apk | 不支持 |
 
-## 连接方式
+桌面端必须保留完整运行目录，包括 Flutter 数据和动态库，不能只复制 EXE 或可执行文件。Android 两端包名分别为 `com.sindre.desk.host` 和 `com.sindre.desk.client`，可以分别安装在同一部兼容手机上。仅支持 ARM64 Android（包括主流骁龙、天玑及部分 Helio 设备），不保证所有设备兼容。不支持 Android 32 位、Linux ARM64、Windows ARM64、macOS、iOS。
 
-1. Linux x64 服务端部署在局域网或云服务器。
-2. Host 和 Client 分别配置同一服务器 IP / 域名及服务器公钥。
-3. Client 输入 Host 的连接码和临时密码。
-4. 局域网内优先由 RustDesk P2P 直连；无法直连时由自建 hbbr 中继。
+下载入口：[Releases](https://github.com/SindreYang/SindreDesk/releases)；如果 Release 没有附件，从对应版本的 [Actions](https://github.com/SindreYang/SindreDesk/actions) 成功运行页面底部 Artifacts 下载。下载 ZIP 后解压。没有成功产物的平台暂不可下载。
 
-媒体数据在 P2P 成功时不经过中继。当前不开放 RustDesk 原生未认证的直接 IP 连接；离线 IP 直连必须先完成独立的安全握手实现和测试。
+## 2. 工作方式
 
-## Linux 服务端
+```text
+Host（被控设备） ── 注册/协商 ── 私有 Server ── 协商 ── Client（控制设备）
+        └────────────── 加密 P2P 会话 ──────────────────┘
+              P2P 不可用时通过自建 hbbr 中继
+```
 
-服务端仅支持 Linux x86_64，使用 Go 单文件运行器管理固定版本的官方 hbbs / hbbr：
+- Host 负责共享画面、提供连接码和临时密码，不发起远程控制。
+- Client 输入目标连接码、密码，发起远程控制，不作为被控服务运行。
+- Server 包含 hbbs（注册、连接协商）和 hbbr（中继），无需账号系统或公共 RustDesk 服务器。
+- 同一局域网可使用服务器协商的 P2P；局域网内自建服务器时无需互联网即可尝试连接。无服务器的直接 IP 模式尚未实现安全握手，当前禁止使用。
+- 保留上游远程会话能力，但剪贴板、文件传输、硬件编码、重连等功能仍需逐项实测。
+
+## 3. 部署 Linux x64 Server
+
+### 3.1 下载并运行
+
+在 Server CI 成功任务的 Artifacts 中下载 `SindreDeskServer-linux-x64-ci`，解压后执行：
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -31,30 +42,143 @@ chmod +x SindreDeskServer
 ./SindreDeskServer
 ```
 
-首次启动自动生成并持久化密钥，控制台输出公钥，不输出私钥。数据默认保存在用户配置目录，也可通过 `SINDREDESK_DATA_DIR` 指定。可通过 `SINDREDESK_RELAY` 指定中继地址。
+以普通 Linux 用户运行，不需要额外安装 Go 或单独启动 hbbs/hbbr。运行器首次启动时生成密钥，控制台输出服务端公钥、数据目录以及 TCP 端口就绪信息。保持进程运行；Ctrl+C 停止。
 
-默认需要 TCP 21115–21117、UDP 21116。请只向可信网络开放必要端口。
+### 3.2 数据和密钥
 
-服务端自动化集成测试已验证官方 hbbs / hbbr 进程启动、TCP / UDP 监听、密钥持久化、重复实例拦截和正常退出；尚未完成真实客户端会话的端到端验收。
+默认数据目录为当前用户配置目录下的 `sindredesk-server`（通常为 `~/.config/sindredesk-server`）。可显式指定：
 
-Server CI 集成测试通过后上传 `SindreDeskServer-linux-x64-ci`，包含 `SindreDeskServer` 和 `SHA256SUMS`。下载解压后可按上述命令验证并启动；该产物不是正式发行版。
+```bash
+export SINDREDESK_DATA_DIR="$HOME/sindredesk-data"
+./SindreDeskServer
+```
 
-## GitHub Actions
+目录必须不是符号链接，权限为 0700 或更严格。相同目录只允许一个服务端实例。另开终端、使用同一数据目录，可读取公钥：
 
-`.github/workflows/client-build.yml` 负责：
-- 生成并共享 Flutter Rust Bridge 文件。
-- 分别构建 Host 和 Client。
-- Linux x64、Windows x64、Android arm64-v8a 编译。
-- 检查各平台可执行文件、Rust FFI 库及 APK ABI。
+```bash
+./SindreDeskServer key
+```
 
-CI APK 使用调试签名，仅用于安装验证，不是生产签名版本。Linux / Windows 当前上传的是应用运行目录，尚未完成正式 AppImage / 安装包签名和发布流程。
+公钥为 32 字节 Base64 字符串，复制给 Host 和 Client；不要分享私钥。升级时保留数据目录，否则重新生成密钥后两端需要重新配置。需要备份时先停止服务，妥善保管整个目录。
 
-## 本地开发
+### 3.3 网络端口
 
-- `bash scripts/checkout-upstream.sh`：获取固定版本 RustDesk 客户端、服务端源码及子模块。
-- `python scripts/prepare-client.py host`：生成 Host 源码工作树。
-- `python scripts/prepare-client.py client`：生成 Client 源码工作树。
-- `bash scripts/build-server-release.sh`：下载并校验固定版本的 Linux x64 hbbs / hbbr，构建服务端运行器。
-- `bash scripts/test-server-integration.sh`：运行服务端真实进程集成测试。
+| 协议 | 端口 | 用途 |
+| --- | --- | --- |
+| TCP | 21115 | NAT 类型检测 |
+| TCP / UDP | 21116 | 注册、心跳、连接协商 |
+| TCP | 21117 | 中继 |
 
-详见 [架构及验收要求](docs/architecture.md)。上游 [RustDesk](https://github.com/rustdesk/rustdesk) 和 [RustDesk Server](https://github.com/rustdesk/rustdesk-server) 使用 AGPL-3.0；分发二进制时必须提供对应源码、构建脚本及许可证声明。
+局域网部署时，使用服务器局域网 IPv4；跨网络部署时使用双方可访问的公网 IP 或域名，并配置防火墙、云安全组及必要的端口映射。仅开放所需端口。上游可能监听额外 WebSocket 端口，本项目不要求对外开放这些端口。
+
+若需要显式指定中继地址：
+
+```bash
+export SINDREDESK_RELAY=remote.example.com:21117
+./SindreDeskServer
+```
+
+当前未提供 systemd 安装器。长期运行时应自行配置进程管理，使用同一用户及持久数据目录。
+
+## 4. Android 使用说明
+
+### 4.1 被控端 Host
+
+1. 下载并解压 Host 构建产物，在目标手机安装 SindreDeskHost.apk；如系统提示，按需允许当前安装来源安装应用。
+2. 打开 SindreDesk Host，点击右上角服务器设置。
+3. 输入 Server 的 IPv4 或域名（不带 http://、https:// 或端口）及公钥，保存。
+4. 展开“系统权限”，按页面提示开启所需权限；远程触摸控制通常需要启用本应用的无障碍服务。
+5. 启动共享服务，接受 Android 系统屏幕捕获授权；按系统提示允许前台服务相关权限。
+6. 读取页面连接码和临时密码，通过可信渠道告知控制者。
+7. 不使用时停止屏幕共享，必要时关闭应用及无障碍授权。
+
+Android 不保证锁屏、重启、后台被系统清理后仍能无人值守控制。系统要求再次授权时必须在被控手机上确认。不要尝试绕过系统隐私权限。
+
+### 4.2 控制端 Client
+
+1. 在控制设备安装 SindreDeskClient.apk。
+2. 打开 SindreDesk Client，在右上角配置与 Host 相同的服务器地址和公钥。
+3. 输入 Host 数字连接码、当前临时密码，点击“连接”。
+4. 连接成功后使用远程会话界面操作；完成后退出会话。
+
+两端必须能访问同一私服。仅输入连接码不需要填写目标手机 IP；当前不支持直接输入 IP 发起连接。
+
+### 4.3 ADB 安装（可选）
+
+启用手机 USB 调试并连接电脑后：
+
+```bash
+adb devices
+adb shell getprop ro.product.cpu.abilist
+adb install -r SindreDeskHost.apk
+adb install -r SindreDeskClient.apk
+```
+
+只需安装对应角色即可。CPU ABI 列表应包含 arm64-v8a。CI APK 使用调试签名，仅供测试；未来正式签名版若不兼容旧签名，可能需要卸载旧版（先备份配置）。
+
+## 5. Windows / Linux 使用说明
+
+解压对应角色的完整运行目录。Windows 双击 SindreDeskHost.exe 或 SindreDeskClient.exe；Linux 进入对应目录执行 `./sindredesk-host` 或 `./sindredesk-client`（必要时先 chmod +x）。按第 4 节相同方式配置服务器、连接码及临时密码。
+
+Windows UAC、锁屏、无人值守服务以及 Linux Wayland 授权、桌面环境兼容性尚待验证；Linux 优先测试 X11。当前未提供正式 MSI、AppImage 或桌面签名安装器。
+
+## 6. 常见问题
+
+| 现象 | 检查方法 |
+| --- | --- |
+| Host 等待服务器连接 | 确认 Server 运行、地址正确、TCP/UDP 21116 可达 |
+| 公钥无效或连接失败 | 确认复制完整的 Base64 公钥，双方使用同一 Server |
+| 密码错误 | 使用 Host 当前显示的临时密码，勿使用旧密码 |
+| 连接后黑屏 | 检查 Host 屏幕捕获授权及共享服务状态 |
+| 能看不能控制 | 检查 Android 无障碍授权或桌面系统控制权限 |
+| 跨网络连接失败 | 检查 NAT、防火墙、TCP 21117 中继可达性 |
+| APK 无法安装 | 检查 ARM64、系统兼容性、安装来源授权及签名冲突 |
+| Release 没有安装包 | 查看该版本 Actions 的构建结论和 Artifacts |
+
+## 7. GitHub Actions 与发布
+
+仓库只保留两个 Workflow：
+
+- `.github/workflows/client-build-verify.yml`：生成共享 Flutter Rust Bridge，构建 Host/Client × Windows/Linux/Android，检查二进制与 APK ABI。
+- `.github/workflows/server.yml`：Go race 测试、vet、Linux x64 编译、真实进程集成测试和服务端产物上传。
+
+仅正式发布 GitHub Release（包括已发布的预发行版）时触发；普通 push、PR 更新及合并 main 不触发。草稿 Release 不触发。发布前使用未占用的新 Tag，基于最新 main 提交。失败任务的旧版本重跑不会包含新提交。
+
+| Artifacts 名称 | 内容 |
+| --- | --- |
+| SindreDesk-host-android-arm64-ci | SindreDeskHost.apk |
+| SindreDesk-client-android-arm64-ci | SindreDeskClient.apk |
+| SindreDesk-host-windows-x64-ci | Windows Host 完整运行目录 |
+| SindreDesk-client-windows-x64-ci | Windows Client 完整运行目录 |
+| SindreDesk-host-linux-x64-ci | Linux Host 完整运行目录 |
+| SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
+| SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
+
+当前工作流上传 Actions Artifacts，不自动将安装包挂载到 Release；下载前确认对应任务成功。CI Android APK 使用调试签名，并检查 ZIP 中原生库仅包含 arm64-v8a 及 librustdesk.so。
+
+## 8. 开发与验收
+
+固定上游 RustDesk 1.4.9（`6c578292e8ebbbec708b76986ba8c4bc7c509747`），RustDesk Server OSS 1.1.16（`73523b31cfd25d77dee862e6fc9f5e1fb5e485ef`）。CI 使用 Rust 1.75、Flutter 3.24.5（Bridge 3.22.3）、Android NDK r28c 和 JDK 17。
+
+```bash
+bash scripts/checkout-upstream.sh
+python scripts/prepare-client.py host
+python scripts/prepare-client.py client
+bash scripts/build-server-release.sh
+bash scripts/test-server-integration.sh
+```
+
+源码准备脚本要求目标目录不存在；已存在时使用 --output 指定新目录。具体编译参数、依赖和平台环境以现有 Workflow 为准。
+
+- [x] Linux 服务端真实进程、端口监听、密钥持久化、重复实例拦截及退出测试。
+- [x] Windows/Linux 两种角色编译（上一轮）。
+- [ ] Android 两种角色修复后 APK 编译及真机安装。
+- [ ] 九种跨平台控制组合、错误密码/公钥拒绝、局域网及跨网络 P2P/中继。
+- [ ] Android 权限、旋转、后台、重连及高通/联发科实机验证。
+- [ ] Windows 锁屏/UAC、Linux Wayland、正式签名及发布附件。
+
+详细要求见 [架构与验收](docs/architecture.md)。
+
+## 9. 许可证
+
+上游 [RustDesk](https://github.com/rustdesk/rustdesk) 与 [RustDesk Server](https://github.com/rustdesk/rustdesk-server) 使用 AGPL-3.0。分发二进制须同时满足对应源码、构建脚本、版权及许可证声明义务。
