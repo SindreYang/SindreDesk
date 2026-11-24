@@ -15,29 +15,7 @@ env:
   VCPKG_COMMIT: "120deac3062162151622ca4860575a33844ba10b"
   CARGO_INCREMENTAL: "0"
 jobs:
-  cancel-obsolete:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Cancel duplicate legacy client runs
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_BRANCH: ${{ github.head_ref }}
-        run: |
-          set -euo pipefail
-          for status in queued in_progress; do
-            gh run list --repo "$GH_REPO" --branch "$PR_BRANCH" --status "$status" --limit 100 --json databaseId,workflowName --jq '.[] | select(.workflowName == "Android ARM64 client build" or .workflowName == "Linux x64 Host and Client build" or .workflowName == "Windows x64 Host and Client build" or .workflowName == "Client source integration") | .databaseId' |
-              while IFS= read -r run_id; do
-                [ -n "$run_id" ] || continue
-                gh run cancel "$run_id" --repo "$GH_REPO" || true
-              done
-          done
   bridge:
-    needs: cancel-obsolete
     runs-on: ubuntu-22.04
     timeout-minutes: 50
     steps:
