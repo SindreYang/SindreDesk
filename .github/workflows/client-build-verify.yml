@@ -243,3 +243,30 @@ jobs:
           name: SindreDesk-${{ matrix.role }}-android-arm64-ci
           path: SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
           if-no-files-found: error
+  publish:
+    name: Publish verified client packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: SindreDesk-*-ci
+          path: packages
+      - name: Package and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          for role in host client; do
+            case "$role" in host) app=SindreDeskHost;; client) app=SindreDeskClient;; esac
+            tar -C "packages/SindreDesk-$role-linux-x64-ci" -czf "release/$app-linux-x64.tar.gz" .
+            (cd "packages/SindreDesk-$role-windows-x64-ci" && zip -qr "../../release/$app-windows-x64.zip" .)
+            cp "packages/SindreDesk-$role-android-arm64-ci/$app.apk" release/
+          done
+          (cd release && sha256sum *.apk *.zip *.tar.gz > SHA256SUMS-clients)
+          gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO"

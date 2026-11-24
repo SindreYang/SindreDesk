@@ -79,6 +79,8 @@ func run() error {
     defer lock.Close()
     if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { return fmt.Errorf("无法获取数据目录锁: %w", err) }
     defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+    // 启动前拒绝已占用端口，避免误把其他实例当成本次启动结果。
+    if err := checkPortsAvailable(); err != nil { return err }
     // 在私有目录释放二进制，避免覆盖持久密钥及数据库。
     bin, err := os.MkdirTemp(dir, ".bin-")
     if err != nil { return err }
@@ -153,4 +155,16 @@ func portsReady() bool {
 
 func main() {
     if err := run(); err != nil { log.Fatal(err) }
+}
+
+// checkPortsAvailable 仅作启动前检查；实际绑定仍由子进程完成。
+func checkPortsAvailable() error {
+    for _, port := range []string{"21115", "21116", "21117"} {
+        listener, err := net.Listen("tcp", ":"+port)
+        if err != nil { return fmt.Errorf("TCP %s 不可用: %w", port, err) }
+        listener.Close()
+    }
+    listener, err := net.ListenPacket("udp", ":21116")
+    if err != nil { return fmt.Errorf("UDP 21116 不可用: %w", err) }
+    return listener.Close()
 }

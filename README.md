@@ -154,7 +154,7 @@ Windows UAC、锁屏、无人值守服务以及 Linux Wayland 授权、桌面环
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
 
-当前工作流上传 Actions Artifacts，不自动将安装包挂载到 Release；下载前确认对应任务成功。CI Android APK 使用调试签名，并检查 ZIP 中原生库仅包含 arm64-v8a 及 librustdesk.so。
+工作流在客户端六项全部成功后上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。分别提供 SHA256SUMS-clients 和 SHA256SUMS-server。下载前确认对应任务成功，调试签名 APK 仅供测试。CI Android APK 使用调试签名，并检查 ZIP 中原生库仅包含 arm64-v8a 及 librustdesk.so。
 
 ## 8. 开发与验收
 
@@ -182,3 +182,7 @@ bash scripts/test-server-integration.sh
 ## 9. 许可证
 
 上游 [RustDesk](https://github.com/rustdesk/rustdesk) 与 [RustDesk Server](https://github.com/rustdesk/rustdesk-server) 使用 AGPL-3.0。分发二进制须同时满足对应源码、构建脚本、版权及许可证声明义务。
+
+### 服务器连接状态
+
+两端首页底部统一显示未配置、连接中、已连接、未就绪。状态来自 RustDesk 原生 Rendezvous 状态，不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
