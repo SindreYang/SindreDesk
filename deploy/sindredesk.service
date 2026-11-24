@@ -1,0 +1,24 @@
+[Unit]
+Description=SindreDesk private rendezvous and relay server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sindredesk
+Group=sindredesk
+StateDirectory=sindredesk
+StateDirectoryMode=0700
+Environment=SINDREDESK_DATA_DIR=/var/lib/sindredesk
+ExecStart=/usr/local/bin/SindreDeskServer
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

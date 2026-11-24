@@ -57,10 +57,33 @@ jobs:
           test -s dist/SindreDeskServer
           cd dist
           sha256sum SindreDeskServer > SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: SindreDeskServer-linux-x64-ci
           path: |
             dist/SindreDeskServer
             dist/SHA256SUMS
           if-no-files-found: error
+  publish:
+    name: Publish verified server package
+    needs: integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: SindreDeskServer-linux-x64-ci
+          path: package
+      - name: Package and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          chmod +x package/SindreDeskServer
+          (cd package && sha256sum -c SHA256SUMS)
+          tar -C package -czf SindreDeskServer-linux-x64.tar.gz .
+          sha256sum SindreDeskServer-linux-x64.tar.gz > SHA256SUMS-server
+          gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz SHA256SUMS-server --repo "$GH_REPO" --clobber

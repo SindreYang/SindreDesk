@@ -73,12 +73,28 @@ func run() error {
         fmt.Println(key)
         return nil
     }
-    if len(os.Args) != 1 { return errors.New("用法: SindreDeskServer [key]") }
+    if len(os.Args) == 2 && os.Args[1] == "status" {
+        lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDONLY|syscall.O_NOFOLLOW, 0600)
+        if err != nil { return fmt.Errorf("服务未运行: %w", err) }
+        defer lock.Close()
+        err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+        if err == nil {
+            syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+            return errors.New("服务未运行")
+        }
+        if !errors.Is(err, syscall.EWOULDBLOCK) { return err }
+        if !portsReady() { return errors.New("服务进程存在，但 TCP 端口未就绪") }
+        fmt.Println("服务运行中；TCP 21115–21117 可达（非协议认证测试）")
+        return nil
+    }
+    if len(os.Args) != 1 { return errors.New("用法: SindreDeskServer [key|status]") }
     lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
     if err != nil { return err }
     defer lock.Close()
     if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { return fmt.Errorf("无法获取数据目录锁: %w", err) }
     defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+    // 启动前拒绝已占用端口，避免误把其他实例当成本次启动结果。
+    if err := checkPortsAvailable(); err != nil { return err }
     // 在私有目录释放二进制，避免覆盖持久密钥及数据库。
     bin, err := os.MkdirTemp(dir, ".bin-")
     if err != nil { return err }
@@ -153,4 +169,16 @@ func portsReady() bool {
 
 func main() {
     if err := run(); err != nil { log.Fatal(err) }
+}
+
+// checkPortsAvailable 仅作启动前检查；实际绑定仍由子进程完成。
+func checkPortsAvailable() error {
+    for _, port := range []string{"21115", "21116", "21117"} {
+        listener, err := net.Listen("tcp", ":"+port)
+        if err != nil { return fmt.Errorf("TCP %s 不可用: %w", port, err) }
+        listener.Close()
+    }
+    listener, err := net.ListenPacket("udp", ":21116")
+    if err != nil { return fmt.Errorf("UDP 21116 不可用: %w", err) }
+    return listener.Close()
 }

@@ -20,11 +20,17 @@ bool validPublicKey(String value) {
 
 bool validServer(String value) {
   final host = value.trim();
-  // V1 私服采用标准端口，IPv4 / DNS；暂不接受 URL、其他服务器或端口。
-  return host.isNotEmpty &&
-      host.length <= 253 &&
-      RegExp(r'^[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*$').hasMatch(host) &&
-      !RegExp(r'(^|\.)rustdesk\.com$', caseSensitive: false).hasMatch(host);
+  final parts = host.split('.');
+  if (host.isEmpty || host.length > 253 ||
+      !parts.every((p) => p.length <= 63 &&
+          RegExp(r'^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$').hasMatch(p))) {
+    return false;
+  }
+  if (RegExp(r'^[0-9.]+$').hasMatch(host) &&
+      (parts.length != 4 || parts.any((p) => (int.tryParse(p) ?? 256) > 255))) {
+    return false;
+  }
+  return !RegExp(r'(^|\.)rustdesk\.com$', caseSensitive: false).hasMatch(host);
 }
 
 class SindreHome extends StatefulWidget {
@@ -50,8 +56,8 @@ class _SindreHomeState extends State<SindreHome> {
   void initState() {
     super.initState();
     if (host) {
-      // 隐藏连接管理窗口，并使用密码自动验证。
-      gFFI.serverModel.hideCm = true;
+      // 保留原生连接管理窗口，确保桌面被控者可断开会话。
+      gFFI.serverModel.hideCm = false;
       unawaited(gFFI.serverModel.setApproveMode('password'));
       unawaited(gFFI.serverModel.setVerificationMethod(kUseTemporaryPassword));
     }
@@ -123,6 +129,28 @@ class _SindreHomeState extends State<SindreHome> {
     ]);
   }
 
+  Widget _serverStatus() => AnimatedBuilder(
+    animation: gFFI.serverModel,
+    builder: (context, _) {
+      final status = gFFI.serverModel.connectStatus;
+      final ready = configured && status > 0;
+      final label = !configured ? '未配置服务器' :
+          ready ? '服务器已连接' :
+          status < 0 ? '服务器未就绪' : '正在连接服务器';
+      final color = ready ? Colors.green :
+          !configured ? Theme.of(context).colorScheme.outline :
+          status < 0 ? Theme.of(context).colorScheme.error : Colors.orange;
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Row(children: [
+          Icon(Icons.circle, size: 10, color: color),
+          const SizedBox(width: 8),
+          Expanded(child: Text(label)),
+        ]),
+      );
+    },
+  );
+
   Widget _hostDesktop() {
     final model = gFFI.serverModel;
     return AnimatedBuilder(
@@ -133,8 +161,7 @@ class _SindreHomeState extends State<SindreHome> {
           _value('本机连接码', model.serverId.text),
           _value('连接密码', model.serverPasswd.text,
             refresh: () => bind.mainUpdateTemporaryPassword()),
-          Text(!configured ? '请配置服务器' :
-            model.connectStatus > 0 ? '服务已连接' : '等待服务器连接'),
+          const Text('远程会话可在连接管理窗口中断开。'),
         ],
       ),
     );
@@ -171,6 +198,7 @@ class _SindreHomeState extends State<SindreHome> {
             onPressed: _settings),
         ],
       ),
+      bottomNavigationBar: SafeArea(child: _serverStatus()),
       body: host && isAndroid
           ? configured
               ? const _AndroidHostPanel()
@@ -227,6 +255,25 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
                   ? mobile.ServerInfo()
                   : mobile.ServiceNotRunningNotification(),
             ),
+            AnimatedBuilder(
+              animation: gFFI.serverModel,
+              builder: (_, __) => Column(children: [
+                for (final client in gFFI.serverModel.clients.where(
+                    (c) => !c.disconnected))
+                  ListTile(
+                    title: Text('会话 ${client.peerId}'),
+                    trailing: TextButton(
+                      onPressed: () => bind.cmCloseConnection(connId: client.id),
+                      child: const Text('断开连接'),
+                    ),
+                  ),
+                if (gFFI.serverModel.isStart)
+                  OutlinedButton(
+                    onPressed: () => gFFI.serverModel.stopService(),
+                    child: const Text('停止共享'),
+                  ),
+              ]),
+            ),
             ExpansionTile(
               title: const Text('系统权限'),
               children: const [mobile.PermissionChecker()],
@@ -268,11 +315,23 @@ class _ServerSettingsState extends State<_ServerSettings> {
       return;
     }
     setState(() { _busy = true; _error = null; });
+    final oldServer = bind.mainGetOptionSync(key: 'custom-rendezvous-server');
+    final oldKey = bind.mainGetOptionSync(key: 'key');
+    final oldRelay = bind.mainGetOptionSync(key: 'relay-server');
+    final oldApi = bind.mainGetOptionSync(key: 'api-server');
+    Future<void> restore() async {
+      await bind.mainSetOption(key: 'key', value: '');
+      await bind.mainSetOption(key: 'custom-rendezvous-server', value: oldServer);
+      await bind.mainSetOption(key: 'relay-server', value: oldRelay);
+      await bind.mainSetOption(key: 'api-server', value: oldApi);
+      await bind.mainSetOption(key: 'key', value: oldKey);
+    }
     try {
       // 先清空旧公钥，切换地址期间禁止新连接。
       await bind.mainSetOption(key: 'key', value: '');
       final ok = await setServerConfig(null, null,
         ServerConfig(idServer: server, key: key));
+      if (!ok) await restore();
       if (!mounted) return;
       if (ok) {
         Navigator.of(context).pop(true);
@@ -280,7 +339,12 @@ class _ServerSettingsState extends State<_ServerSettings> {
         setState(() => _error = '保存失败');
       }
     } catch (_) {
-      if (mounted) setState(() => _error = '保存失败');
+      try {
+        await restore();
+        if (mounted) setState(() => _error = '保存失败，已恢复原配置');
+      } catch (_) {
+        if (mounted) setState(() => _error = '保存及恢复失败，请重新配置');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -308,3 +372,4 @@ class _ServerSettingsState extends State<_ServerSettings> {
     ],
   );
 }
+
