@@ -35,7 +35,7 @@ def patch(path, transform):
 
 def patch_config(text, role):
     host = role == "host"
-    name = "SindreDeskHost" if host else "SindreDeskClient"
+    name = "SindreDesk Host" if host else "SindreDesk Client"
     for function, value in [
         ("is_incoming_only", host),
         ("is_outgoing_only", not host),
@@ -137,6 +137,33 @@ def patch_gradle(text, role):
     return text
 
 
+def patch_desktop_branding(source, role):
+    suffix = role
+    display = "SindreDesk " + role.title()
+    linux = source / "flutter/linux/CMakeLists.txt"
+    patch(linux, lambda s: replace_once(
+        replace_once(s, 'set(BINARY_NAME "rustdesk")',
+                     f'set(BINARY_NAME "sindredesk-{suffix}")'),
+        'set(APPLICATION_ID "com.carriez.flutter_hbb")',
+        f'set(APPLICATION_ID "com.sindre.desk.{suffix}")'))
+    windows = source / "flutter/windows/CMakeLists.txt"
+    patch(windows, lambda s: replace_once(
+        s, 'set(BINARY_NAME "rustdesk")',
+        f'set(BINARY_NAME "SindreDesk{role.title()}")'))
+    manifest = source / "flutter/android/app/src/main/AndroidManifest.xml"
+    patch(manifest, lambda s: s.replace(
+        'android:label="RustDesk"', f'android:label="{display}"'
+    ).replace('android:label="RustDesk Input"', f'android:label="{display} Input"'))
+    kotlin = source / "flutter/android/app/src/main/kotlin"
+    for path in kotlin.rglob("*.kt"):
+        text = path.read_text(encoding="utf-8")
+        text = text.replace('"RustDesk"', f'"{display}"')
+        path.write_text(text, encoding="utf-8")
+    strings = source / "flutter/android/app/src/main/res/values/strings.xml"
+    if strings.exists():
+        patch(strings, lambda s: s.replace("RustDesk", display))
+
+
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
@@ -156,9 +183,7 @@ def prepare(source, role):
     patch(source / "flutter/lib/main.dart", patch_main)
     patch(source / "flutter/lib/desktop/pages/desktop_tab_page.dart", patch_desktop_tab)
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
-    patch(source / "flutter/android/app/src/main/AndroidManifest.xml",
-        lambda s: replace_once(s, 'android:label="RustDesk"',
-                               'android:label="SindreDesk' + role.title() + '"'))
+    patch_desktop_branding(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
     shutil.copy2(ROOT / "client/flutter/sindre_home.dart", dest / "sindre_home.dart")
