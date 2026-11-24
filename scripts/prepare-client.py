@@ -143,7 +143,7 @@ def prepare(source, role):
     patch(source / "src/common.rs", patch_common)
     patch(source / "src/server.rs", lambda s: replace_once(s,
         '    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;',
-        '''    if config::is_outgoing_only() || !stream.is_secured() {
+        '''    if hbb_common::config::is_outgoing_only() || !stream.is_secured() {
         bail!("Incoming connections require Host role and encryption");
     }
     Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;'''))
