@@ -13,14 +13,37 @@ env:
   VCPKG_COMMIT: "120deac3062162151622ca4860575a33844ba10b"
   CARGO_INCREMENTAL: "0"
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check release prerequisites
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          ENGINE_SHA256: ${{ vars.WINDOWS_ENGINE_SHA256 }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" || "$PRERELEASE" != true ]]; then
+            [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] || { echo 'Android signing configuration missing or incomplete'; exit 1; }
+          fi
+          if [[ -n "$ENGINE_SHA256" || "$PRERELEASE" != true ]]; then
+            [[ "$ENGINE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Windows engine SHA256 missing or invalid'; exit 1; }
+          fi
+      - run: python -m unittest discover -s tests -v
   bridge:
+    needs: preflight
     runs-on: ubuntu-22.04
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - run: python -m unittest discover -s tests -v
       - run: python scripts/prepare-client.py client
       - name: Install bridge prerequisites
         run: |
@@ -264,7 +287,10 @@ jobs:
           flutter build apk --release --target-platform android-arm64
           apk=build/app/outputs/flutter-apk/app-release.apk
           test -s "$apk"
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify "$apk"
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$tools/apksigner" verify "$apk"
+          package=$("$tools/aapt" dump badging "$apk" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          test "$package" = "com.sindre.desk.${{ matrix.role }}"
           python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
           cp "$apk" "$GITHUB_WORKSPACE/$app.apk"

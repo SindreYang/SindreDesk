@@ -278,6 +278,7 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
   void initState() {
     super.initState();
     gFFI.serverModel.checkAndroidPermission();
+    mobile.checkService();
     _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       gFFI.serverModel.fetchID();
     });
@@ -291,7 +292,6 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
 
   @override
   Widget build(BuildContext context) {
-    mobile.checkService();
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: SingleChildScrollView(

@@ -38,6 +38,16 @@ class PrepareClientTests(unittest.TestCase):
         self.assertEqual(text.count("class SindreHome extends"), 1)
         self.assertEqual(text.count("bool validServer("), 1)
 
+    def test_signing_properties_escape(self):
+        signing_spec = importlib.util.spec_from_file_location(
+            "write_android_signing", ROOT / "scripts/write-android-signing.py")
+        signing = importlib.util.module_from_spec(signing_spec)
+        signing_spec.loader.exec_module(signing)
+        self.assertEqual(signing.escape("a b:c=d#e!"), r"a\ b\:c\=d\#e\!")
+        self.assertEqual(signing.escape("a\\b"), r"a\\b")
+        self.assertEqual(signing.escape("中"), r"\u4e2d")
+        self.assertEqual(signing.escape("😀"), r"\ud83d\ude00")
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])
