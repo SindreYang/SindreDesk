@@ -34,6 +34,7 @@ stop() {
   fi
 }
 start
+"$bin" status
 key="$("$bin" key)"
 [[ -n "$key" ]]
 [[ "$key" == "$(cat "$SINDREDESK_DATA_DIR/id_ed25519.pub")" ]]
@@ -43,7 +44,9 @@ if "$bin" >"$tmp/duplicate.log" 2>&1; then
 fi
 grep -q '无法获取数据目录锁' "$tmp/duplicate.log"
 stop
+if "$bin" status; then echo '停止后错误报告在线' >&2; exit 1; fi
 start
+"$bin" status
 [[ "$("$bin" key)" == "$key" ]]
 stop
 echo '服务端实际进程启动、UDP/TCP、重复实例、退出和密钥持久化测试通过'

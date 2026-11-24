@@ -168,6 +168,12 @@ def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
     patch(source / "src/common.rs", patch_common)
+    # 两个 Android 原生启动入口必须同时限制，避免绕过 Flutter 首页。
+    patch(source / "src/flutter_ffi.rs", lambda s: replace_once(
+        replace_once(s, 'pub fn main_start_service() {',
+                     'pub fn main_start_service() {\\n    if config::is_outgoing_only() { return; }'),
+        '        log::debug!("startService from jvm");',
+        '        if config::is_outgoing_only() { return; }\\n        log::debug!("startService from jvm");'))
     patch(source / "src/server.rs", lambda s: replace_once(s,
         '    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;',
         '''    if hbb_common::config::is_outgoing_only() || !stream.is_secured() {

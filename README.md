@@ -201,3 +201,7 @@ bash scripts/test-server-integration.sh
 两端首页底部统一显示未配置、连接中、已连接、未就绪。状态来自 RustDesk 原生 Rendezvous 状态，不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
 
 完整验收记录模板见 [发布验收](docs/acceptance.md)，第三方来源见 [声明](THIRD_PARTY_NOTICES.md)，版本变更见 [CHANGELOG](CHANGELOG.md)。
+
+### 控制端状态说明
+
+Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显示服务器可达/不可达/检测中；可达不表示公钥认证成功。Host 继续显示原生注册状态。每 5 秒检测，连接超时 3 秒。
