@@ -1,0 +1,31 @@
+name: Server foundation CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server .
+      - run: bash -n ../scripts/checkout-upstream.sh
+      - run: |
+          bash -n ../scripts/build-server.sh
+          if ./server; then
+            echo "Missing embedded binaries should fail"
+            exit 1
+          fi
+        env:
+          SINDREDESK_DATA_DIR: ${{ runner.temp }}/sindredesk-test
