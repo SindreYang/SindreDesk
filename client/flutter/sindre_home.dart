@@ -3,11 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../common.dart';
 import '../models/platform_model.dart';
 import '../mobile/pages/server_page.dart' as mobile;
-import '../desktop/pages/desktop_home_page.dart' show setPasswordDialog;
 
 bool validPublicKey(String value) {
   try {
@@ -126,7 +126,6 @@ class _SindreHomeState extends State<SindreHome> {
           _value('本机连接码', model.serverId.text),
           _value('连接密码', model.serverPasswd.text,
             refresh: () => bind.mainUpdateTemporaryPassword()),
-          TextButton(onPressed: () => setPasswordDialog(), child: const Text('设置固定密码')),
           Text(!configured ? '请配置服务器' :
             model.connectStatus > 0 ? '服务已连接' : '等待服务器连接'),
         ],
@@ -167,7 +166,7 @@ class _SindreHomeState extends State<SindreHome> {
       ),
       body: host && isAndroid
           ? configured
-              ? mobile.ServerPage()
+              ? const _AndroidHostPanel()
               : const Center(child: Text('请先配置服务器地址和公钥'))
           : Center(
               child: SingleChildScrollView(
@@ -178,6 +177,56 @@ class _SindreHomeState extends State<SindreHome> {
                 ),
               ),
             ),
+    );
+  }
+}
+
+class _AndroidHostPanel extends StatefulWidget {
+  const _AndroidHostPanel();
+
+  @override
+  State<_AndroidHostPanel> createState() => _AndroidHostPanelState();
+}
+
+class _AndroidHostPanelState extends State<_AndroidHostPanel> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    gFFI.serverModel.checkAndroidPermission();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) {
+      gFFI.serverModel.fetchID();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    mobile.checkService();
+    return ChangeNotifierProvider.value(
+      value: gFFI.serverModel,
+      child: SingleChildScrollView(
+        child: Column(
+          children: [
+            AnimatedBuilder(
+              animation: gFFI.serverModel,
+              builder: (_, __) => gFFI.serverModel.isStart
+                  ? mobile.ServerInfo()
+                  : mobile.ServiceNotRunningNotification(),
+            ),
+            ExpansionTile(
+              title: const Text('系统权限'),
+              children: const [mobile.PermissionChecker()],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
