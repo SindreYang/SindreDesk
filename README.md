@@ -167,7 +167,7 @@ Windows UAC、锁屏、无人值守服务以及 Linux Wayland 授权、桌面环
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
 
-工作流在客户端六项全部成功后上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。分别提供 SHA256SUMS-clients 和 SHA256SUMS-server。下载前确认对应任务成功，调试签名 APK 仅供测试。未配置正式签名的预发行版 APK 使用调试签名；稳定版必须使用正式签名。构建检查 APK 签名、角色包名及 arm64-v8a 原生库。
+工作流在客户端六项全部成功后上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。分别提供 SHA256SUMS-clients 和 SHA256SUMS-server。下载前确认对应任务成功，调试签名 APK 仅供测试。未配置正式签名的 0.x 开发版或预发行版 APK 使用调试签名，Release 文件名带 -test；其他稳定版必须使用正式签名。构建检查 APK 签名、角色包名及 arm64-v8a 原生库。
 
 ## 8. 开发与验收
 
@@ -208,6 +208,8 @@ Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显�
 
 ### 正式发布配置
 
-预发行版可以使用临时调试签名；稳定版必须在仓库 Actions Secrets 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，并在 Actions Variables 配置 `WINDOWS_ENGINE_SHA256`（可信来源核对的 64 位十六进制 SHA256）。签名配置不完整或引擎校验不一致时构建失败。不要提交证书、密码或私钥。正式签名与调试签名不同，旧测试 APK 可能需要先卸载。签名和哈希配置不是实机验收的替代。
+0.x 开发版本及预发行版可以使用临时调试签名（即使 GitHub 未勾选 Pre-release）；其他稳定版必须在仓库 Actions Secrets 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，并在 Actions Variables 配置 `WINDOWS_ENGINE_SHA256`（可信来源核对的 64 位十六进制 SHA256）。签名配置不完整或引擎校验不一致时构建失败。不要提交证书、密码或私钥。正式签名与调试签名不同，旧测试 APK 可能需要先卸载。签名和哈希配置不是实机验收的替代。
 
 发布前先运行 `python -m unittest discover -s tests -v`。Release 客户端工作流首先检查签名配置和引擎哈希格式，再启动耗时构建，以避免配置缺失导致六个平台重复编译。
+
+0.x 开发版本允许暂缺 Windows Engine 哈希，仅供测试；建议仍勾选 Pre-release。已有但无效或不完整的配置继续拒绝构建。旧 Tag 不会自动包含新代码。

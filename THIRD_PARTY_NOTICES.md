@@ -7,3 +7,5 @@ SindreDesk 基于 RustDesk 1.4.9（6c578292e8ebbbec708b76986ba8c4bc7c509747）�
 Windows 自定义 Flutter Engine 来自 RustDesk Engine，当前使用可变下载入口，固定版本和校验仍是发布阻塞项。
 
 稳定版 Windows 构建强制校验管理员配置的 WINDOWS_ENGINE_SHA256；预发行版未配置时仅记录警告。下载地址仍来自上游可变入口，哈希不匹配即拒绝构建。
+
+0.x 开发版本与预发行版允许暂缺 Windows Engine SHA256，仅用于测试；其他稳定版仍强制校验。

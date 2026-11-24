@@ -22,6 +22,7 @@ jobs:
       - name: Check release prerequisites
         env:
           PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           ENGINE_SHA256: ${{ vars.WINDOWS_ENGINE_SHA256 }}
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
@@ -29,10 +30,12 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -n "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" || "$PRERELEASE" != true ]]; then
+          development=false
+          if [[ "$PRERELEASE" == true || "$RELEASE_TAG" =~ ^v?0\.[0-9]+\.[0-9]+([+-].*)?$ ]]; then development=true; fi
+          if [[ -n "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" || "$development" != true ]]; then
             [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] || { echo 'Android signing configuration missing or incomplete'; exit 1; }
           fi
-          if [[ -n "$ENGINE_SHA256" || "$PRERELEASE" != true ]]; then
+          if [[ -n "$ENGINE_SHA256" || "$development" != true ]]; then
             [[ "$ENGINE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Windows engine SHA256 missing or invalid'; exit 1; }
           fi
       - run: python -m unittest discover -s tests -v
@@ -220,6 +223,7 @@ jobs:
         env:
           ENGINE_SHA256: ${{ vars.WINDOWS_ENGINE_SHA256 }}
           PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source -Parent) -Parent
           flutter precache --windows
@@ -229,7 +233,7 @@ jobs:
             if ($env:ENGINE_SHA256 -notmatch '^[0-9a-fA-F]{64}$' -or $actual -ne $env:ENGINE_SHA256) {
               throw "Windows engine SHA256 mismatch"
             }
-          } elseif ($env:PRERELEASE -ne "true") {
+          } elseif ($env:PRERELEASE -ne "true" -and $env:RELEASE_TAG -notmatch '^v?0\.[0-9]+\.[0-9]+([+-].*)?$') {
             throw "Stable releases require WINDOWS_ENGINE_SHA256"
           } else {
             Write-Warning "Unpinned Windows engine for prerelease only: $actual"
@@ -256,11 +260,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           if [[ -z "$KEYSTORE_B64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]]; then
-            [[ "$PRERELEASE" == true ]] || { echo "Stable releases require Android signing secrets"; exit 1; }
+            [[ "$PRERELEASE" == true || "$RELEASE_TAG" =~ ^v?0\.[0-9]+\.[0-9]+([+-].*)?$ ]] || { echo "Stable releases require Android signing secrets"; exit 1; }
             sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
+            echo "ANDROID_TEST_SIGNING=true" >> "$GITHUB_ENV"
           else
             [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] || { echo "Incomplete signing configuration"; exit 1; }
             umask 077
@@ -294,6 +300,9 @@ jobs:
           python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
           cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
+          if [[ "${ANDROID_TEST_SIGNING:-false}" == true ]]; then
+            printf "Debug signing; installation testing only.\n" > "$GITHUB_WORKSPACE/$app-TEST-SIGNING.txt"
+          fi
       - name: Remove Android signing material
         if: always() && matrix.platform == 'android'
         working-directory: .
@@ -314,7 +323,9 @@ jobs:
         if: matrix.platform == 'android'
         with:
           name: SindreDesk-${{ matrix.role }}-android-arm64-ci
-          path: SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
+          path: |
+            SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
+            SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}-TEST-SIGNING.txt
           if-no-files-found: error
   publish:
     name: Publish verified client packages
@@ -340,7 +351,16 @@ jobs:
             chmod +x "packages/SindreDesk-$role-linux-x64-ci/sindredesk-$role"
             tar -C "packages/SindreDesk-$role-linux-x64-ci" -czf "release/$app-linux-x64.tar.gz" .
             (cd "packages/SindreDesk-$role-windows-x64-ci" && zip -qr "../../release/$app-windows-x64.zip" .)
-            cp "packages/SindreDesk-$role-android-arm64-ci/$app.apk" release/
+            android="packages/SindreDesk-$role-android-arm64-ci"
+            if [[ -f "$android/$app-TEST-SIGNING.txt" ]]; then
+              cp "$android/$app.apk" "release/$app-test.apk"
+              cp "$android/$app-TEST-SIGNING.txt" release/
+            else
+              cp "$android/$app.apk" release/
+            fi
           done
           (cd release && sha256sum *.apk *.zip *.tar.gz > SHA256SUMS-clients)
+          if [[ "$RELEASE_TAG" =~ ^v?0\.[0-9]+\.[0-9]+([+-].*)?$ ]]; then
+            printf "0.x development build; not production validated.\n" > release/DEVELOPMENT-BUILD.txt
+          fi
           gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO" --clobber
