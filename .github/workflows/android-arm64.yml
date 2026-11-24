@@ -38,7 +38,7 @@ jobs:
         working-directory: upstream/${{ matrix.role }}
         run: |
           FLUTTER_ROOT="$(dirname "$(dirname "$(command -v flutter)")")"
-          git -C "$FLUTTER_ROOT" apply .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+          git -C "$FLUTTER_ROOT" apply "$GITHUB_WORKSPACE/upstream/${{ matrix.role }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
       - name: Install Android NDK
         id: ndk
         uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
