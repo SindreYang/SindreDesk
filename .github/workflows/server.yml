@@ -1,0 +1,54 @@
+name: Server CI
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: server-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    name: Unit tests, static checks and Linux x64 build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Run race-enabled tests
+        run: go test -race ./...
+      - name: Run Go vet
+        run: go vet ./...
+      - name: Build Linux x64 server
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server .
+      - name: Check build scripts
+        run: |
+          bash -n ../scripts/checkout-upstream.sh
+          bash -n ../scripts/build-server.sh
+      - name: Verify missing embedded binaries fail safely
+        env:
+          SINDREDESK_DATA_DIR: ${{ runner.temp }}/sindredesk-test
+        run: |
+          if ./server; then
+            echo "Missing embedded binaries should fail"
+            exit 1
+          fi
+  integration:
+    name: Linux x64 server integration
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Build release server
+        run: bash scripts/build-server-release.sh
+      - name: Run server integration tests
+        run: bash scripts/test-server-integration.sh

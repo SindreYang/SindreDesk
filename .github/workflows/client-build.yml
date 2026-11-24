@@ -1,0 +1,241 @@
+name: Client build verification
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: client-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  RUST_VERSION: "1.75"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT: "120deac3062162151622ca4860575a33844ba10b"
+  CARGO_INCREMENTAL: "0"
+jobs:
+  bridge:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python scripts/prepare-client.py client
+      - name: Install bridge prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake gcc g++ libclang-dev libgtk-3-dev llvm-dev nasm ninja-build pkg-config
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: "3.22.3"
+          channel: stable
+      - name: Generate FFI bridge
+        working-directory: upstream/client
+        run: |
+          cargo install cargo-expand --version 1.0.95 --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          sed -i 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
+          (cd flutter && flutter pub get)
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          mkdir -p bridge/src bridge/flutter/lib
+          cp src/bridge_generated.rs src/bridge_generated.io.rs bridge/src/
+          cp flutter/lib/generated_bridge.dart flutter/lib/generated_bridge.freezed.dart bridge/flutter/lib/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sindredesk-ffi-bridge
+          path: upstream/client/bridge/
+          if-no-files-found: error
+  build:
+    needs: bridge
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        role: [host, client]
+        platform: [linux, windows, android]
+        include:
+          - platform: linux
+            os: ubuntu-22.04
+          - platform: windows
+            os: windows-2022
+          - platform: android
+            os: ubuntu-24.04
+    name: ${{ matrix.platform }} / ${{ matrix.role }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream/${{ matrix.role }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare role-specific upstream source
+        working-directory: .
+        run: python scripts/prepare-client.py ${{ matrix.role }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: sindredesk-ffi-bridge
+          path: upstream/${{ matrix.role }}
+      - name: Install native dependencies (Linux / Android)
+        if: matrix.platform != 'windows'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake curl libclang-dev llvm-dev nasm ninja-build pkg-config libayatana-appindicator3-dev libasound2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libunwind-dev libpam0g-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxdo-dev libxfixes-dev libssl-dev libwayland-dev wayland-protocols
+      - name: Install LLVM (Windows)
+        if: matrix.platform == 'windows'
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        with:
+          version: "15.0.6"
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            upstream/${{ matrix.role }} -> target
+          key: ${{ matrix.platform }}-${{ matrix.role }}
+      - name: Apply pinned upstream Flutter SDK patch
+        run: |
+          patch="$PWD/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          sdk="$(dirname "$(dirname "$(command -v flutter)")")"
+          git -C "$sdk" apply "$patch"
+      - name: Set up JDK 17
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Android NDK
+        if: matrix.platform == 'android'
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: ndk
+        with:
+          ndk-version: r28c
+          add-to-path: true
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+      - name: Install vcpkg at upstream baseline
+        run: |
+          root="$RUNNER_TEMP/sindre-vcpkg"
+          git init "$root"
+          git -C "$root" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$root" fetch --depth 1 origin "$VCPKG_COMMIT"
+          git -C "$root" checkout --detach "$VCPKG_COMMIT"
+          if [[ "${{ matrix.platform }}" == windows ]]; then
+            cmd.exe //c "$(cygpath -w "$root/bootstrap-vcpkg.bat")" -disableMetrics
+            echo "VCPKG_ROOT=$(cygpath -m "$root")" >> "$GITHUB_ENV"
+          else
+            bash "$root/bootstrap-vcpkg.sh" -disableMetrics
+            echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          fi
+      - name: Install Linux codec dependencies
+        if: matrix.platform == 'linux'
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+      - name: Install Windows codec dependencies
+        if: matrix.platform == 'windows'
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        run: |
+          "$VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+      - name: Install Android codec dependencies
+        if: matrix.platform == 'android'
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          rustup target add aarch64-linux-android
+          bash flutter/build_android_deps.sh arm64-v8a
+      - name: Compile Linux x64 Rust and Flutter
+        if: matrix.platform == 'linux'
+        run: |
+          sed -i 's/\["cdylib", "staticlib", "rlib"\]/["cdylib"]/g' Cargo.toml
+          cargo build --locked --lib --features hwcodec,flutter,unix-file-copy-paste --release
+          cd flutter
+          flutter pub get
+          flutter build linux --release
+          app="sindredesk-${{ matrix.role }}"
+          test -x "build/linux/x64/release/bundle/$app"
+          test -s build/linux/x64/release/bundle/lib/librustdesk.so
+      - name: Install custom RustDesk Flutter engine (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source -Parent) -Parent
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $engineDir = Join-Path $flutterRoot "bin/cache/artifacts/engine/windows-x64-release"
+          New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
+          Copy-Item -Path "windows-x64-release/*" -Destination $engineDir -Recurse -Force
+      - name: Compile Windows x64 Rust and Flutter
+        if: matrix.platform == 'windows'
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+          VCPKGRS_TRIPLET: x64-windows-static
+        run: |
+          python build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
+          test -s "flutter/build/windows/x64/runner/Release/$app.exe"
+          test -s flutter/build/windows/x64/runner/Release/librustdesk.dll
+      - name: Compile Android ARM64 Rust and Flutter
+        if: matrix.platform == 'android'
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          cargo install cargo-ndk --version 3.1.2 --locked
+          bash flutter/ndk_arm64.sh
+          jni=flutter/android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$jni"
+          cp target/aarch64-linux-android/release/liblibrustdesk.so "$jni/librustdesk.so"
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$jni/"
+          # CI-only signing: never treat this APK as a production release.
+          sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
+          sed -i 's/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g' flutter/android/gradle.properties
+          cd flutter
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64 --split-per-abi
+          apk=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          test -s "$apk"
+          python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
+          if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
+          cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'linux'
+        with:
+          name: SindreDesk-${{ matrix.role }}-linux-x64-ci
+          path: upstream/${{ matrix.role }}/flutter/build/linux/x64/release/bundle/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'windows'
+        with:
+          name: SindreDesk-${{ matrix.role }}-windows-x64-ci
+          path: upstream/${{ matrix.role }}/flutter/build/windows/x64/runner/Release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: matrix.platform == 'android'
+        with:
+          name: SindreDesk-${{ matrix.role }}-android-arm64-ci
+          path: SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
+          if-no-files-found: error
