@@ -1,7 +1,5 @@
 name: Client build verification
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   release:
