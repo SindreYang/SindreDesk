@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -40,7 +39,6 @@ class _SindreHomeState extends State<SindreHome> {
   Timer? _timer;
   bool _busy = false;
   String _message = '';
-  String _lan = '';
 
   bool get host => bind.isIncomingOnly();
   bool get configured =>
@@ -56,21 +54,8 @@ class _SindreHomeState extends State<SindreHome> {
         gFFI.serverModel.fetchID();
       });
     }
-    if (host) _readLan();
   }
 
-  Future<void> _readLan() async {
-    try {
-      final interfaces = await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-      );
-      final ips = interfaces.expand((i) => i.addresses).map((a) => a.address);
-      if (mounted) setState(() => _lan = ips.join(' / '));
-    } catch (_) {
-      if (mounted) setState(() => _lan = '不可用');
-    }
-  }
 
   @override
   void dispose() {
@@ -142,7 +127,6 @@ class _SindreHomeState extends State<SindreHome> {
           _value('连接密码', model.serverPasswd.text,
             refresh: () => bind.mainUpdateTemporaryPassword()),
           TextButton(onPressed: () => setPasswordDialog(), child: const Text('设置固定密码')),
-          _value('局域网地址', _lan.isEmpty ? '—' : _lan),
           Text(!configured ? '请配置服务器' :
             model.connectStatus > 0 ? '服务已连接' : '等待服务器连接'),
         ],
