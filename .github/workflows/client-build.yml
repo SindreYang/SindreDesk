@@ -55,6 +55,7 @@ jobs:
     needs: bridge
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         role: [host, client]
         platform: [linux, windows, android]
@@ -119,6 +120,12 @@ jobs:
         with:
           ndk-version: r28c
           add-to-path: true
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Install vcpkg at upstream baseline
         run: |
           root="$RUNNER_TEMP/sindre-vcpkg"
@@ -135,17 +142,21 @@ jobs:
           fi
       - name: Install Linux codec dependencies
         if: matrix.platform == 'linux'
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
           "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
       - name: Install Windows codec dependencies
         if: matrix.platform == 'windows'
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
           "$VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
       - name: Install Android codec dependencies
         if: matrix.platform == 'android'
         env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
@@ -160,13 +171,29 @@ jobs:
           cd flutter
           flutter pub get
           flutter build linux --release
-          test -f build/linux/x64/release/bundle/rustdesk
+          app="sindredesk-${{ matrix.role }}"
+          test -x "build/linux/x64/release/bundle/$app"
           test -s build/linux/x64/release/bundle/lib/librustdesk.so
+      - name: Install custom RustDesk Flutter engine (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source -Parent) -Parent
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $engineDir = Join-Path $flutterRoot "bin/cache/artifacts/engine/windows-x64-release"
+          New-Item -ItemType Directory -Force -Path $engineDir | Out-Null
+          Copy-Item -Path "windows-x64-release/*" -Destination $engineDir -Recurse -Force
       - name: Compile Windows x64 Rust and Flutter
         if: matrix.platform == 'windows'
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+          VCPKGRS_TRIPLET: x64-windows-static
         run: |
           python build.py --portable --flutter --skip-portable-pack --hwcodec --vram
-          test -s flutter/build/windows/x64/runner/Release/rustdesk.exe
+          if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
+          test -s "flutter/build/windows/x64/runner/Release/$app.exe"
           test -s flutter/build/windows/x64/runner/Release/librustdesk.dll
       - name: Compile Android ARM64 Rust and Flutter
         if: matrix.platform == 'android'
@@ -189,6 +216,8 @@ jobs:
           apk=build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           test -s "$apk"
           python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
+          if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
+          cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
       - uses: actions/upload-artifact@v4
         if: matrix.platform == 'linux'
         with:
@@ -205,5 +234,5 @@ jobs:
         if: matrix.platform == 'android'
         with:
           name: SindreDesk-${{ matrix.role }}-android-arm64-ci
-          path: upstream/${{ matrix.role }}/flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          path: SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
           if-no-files-found: error
