@@ -26,8 +26,9 @@ Android 目标设备为主流高通 Snapdragon 与联发科 Dimensity / Helio 64
 服务端仅支持 Linux x86_64，使用 Go 单文件运行器管理固定版本的官方 hbbs / hbbr：
 
 ```bash
-chmod +x sindredesk-server-linux-amd64
-./sindredesk-server-linux-amd64
+sha256sum -c SHA256SUMS
+chmod +x SindreDeskServer
+./SindreDeskServer
 ```
 
 首次启动自动生成并持久化密钥，控制台输出公钥，不输出私钥。数据默认保存在用户配置目录，也可通过 `SINDREDESK_DATA_DIR` 指定。可通过 `SINDREDESK_RELAY` 指定中继地址。
@@ -35,6 +36,8 @@ chmod +x sindredesk-server-linux-amd64
 默认需要 TCP 21115–21117、UDP 21116。请只向可信网络开放必要端口。
 
 服务端自动化集成测试已验证官方 hbbs / hbbr 进程启动、TCP / UDP 监听、密钥持久化、重复实例拦截和正常退出；尚未完成真实客户端会话的端到端验收。
+
+Server CI 集成测试通过后上传 `SindreDeskServer-linux-x64-ci`，包含 `SindreDeskServer` 和 `SHA256SUMS`。下载解压后可按上述命令验证并启动；该产物不是正式发行版。
 
 ## GitHub Actions
 
