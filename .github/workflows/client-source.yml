@@ -1,0 +1,23 @@
+name: Client source integration
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        role: [host, client]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+        with:
+          flutter-version: '3.24.5'
+      - run: python scripts/prepare-client.py ${{ matrix.role }}
+      - run: |
+          cd upstream/${{ matrix.role }}
+          dart format --output=none flutter/lib/sindre/sindre_home.dart flutter/lib/main.dart flutter/lib/desktop/pages/desktop_tab_page.dart
+          rustfmt --edition 2021 --emit stdout --config skip_children=true src/client.rs src/common.rs src/server.rs src/rendezvous_mediator.rs libs/hbb_common/src/config.rs > /dev/null
