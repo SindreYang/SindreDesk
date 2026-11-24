@@ -1,9 +1,7 @@
 name: Client build verification
 on:
-  pull_request:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  release:
+    types: [published]
 permissions:
   contents: read
 concurrency:
