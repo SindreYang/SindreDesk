@@ -86,4 +86,4 @@ jobs:
           (cd package && sha256sum -c SHA256SUMS)
           tar -C package -czf SindreDeskServer-linux-x64.tar.gz .
           sha256sum SindreDeskServer-linux-x64.tar.gz > SHA256SUMS-server
-          gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz SHA256SUMS-server --repo "$GH_REPO"
+          gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz SHA256SUMS-server --repo "$GH_REPO" --clobber

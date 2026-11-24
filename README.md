@@ -78,7 +78,20 @@ export SINDREDESK_RELAY=remote.example.com:21117
 ./SindreDeskServer
 ```
 
-当前未提供 systemd 安装器。长期运行时应自行配置进程管理，使用同一用户及持久数据目录。
+可选 systemd 部署（Linux 管理员执行；先确认未运行其他实例）：
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin sindredesk
+sudo install -m 0755 SindreDeskServer /usr/local/bin/SindreDeskServer
+sudo install -m 0644 deploy/sindredesk.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sindredesk
+sudo systemctl status sindredesk
+sudo journalctl -u sindredesk -f
+sudo -u sindredesk env SINDREDESK_DATA_DIR=/var/lib/sindredesk /usr/local/bin/SindreDeskServer key
+```
+
+服务单元从对应源码版本获取；已有用户时跳过 useradd。systemd 在异常退出时重启，密钥保留在 /var/lib/sindredesk。手动运行可用同一数据目录执行 `./SindreDeskServer status` 查询进程锁与 TCP 端口状态；这不是协议认证检查。
 
 ## 4. Android 使用说明
 
@@ -186,3 +199,5 @@ bash scripts/test-server-integration.sh
 ### 服务器连接状态
 
 两端首页底部统一显示未配置、连接中、已连接、未就绪。状态来自 RustDesk 原生 Rendezvous 状态，不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
+
+完整验收记录模板见 [发布验收](docs/acceptance.md)，第三方来源见 [声明](THIRD_PARTY_NOTICES.md)，版本变更见 [CHANGELOG](CHANGELOG.md)。

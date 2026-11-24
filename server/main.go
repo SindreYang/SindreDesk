@@ -73,7 +73,21 @@ func run() error {
         fmt.Println(key)
         return nil
     }
-    if len(os.Args) != 1 { return errors.New("用法: SindreDeskServer [key]") }
+    if len(os.Args) == 2 && os.Args[1] == "status" {
+        lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDONLY|syscall.O_NOFOLLOW, 0600)
+        if err != nil { return fmt.Errorf("服务未运行: %w", err) }
+        defer lock.Close()
+        err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+        if err == nil {
+            syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+            return errors.New("服务未运行")
+        }
+        if !errors.Is(err, syscall.EWOULDBLOCK) { return err }
+        if !portsReady() { return errors.New("服务进程存在，但 TCP 端口未就绪") }
+        fmt.Println("服务运行中；TCP 21115–21117 可达（非协议认证测试）")
+        return nil
+    }
+    if len(os.Args) != 1 { return errors.New("用法: SindreDeskServer [key|status]") }
     lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
     if err != nil { return err }
     defer lock.Close()

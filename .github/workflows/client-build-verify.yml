@@ -33,11 +33,17 @@ jobs:
         with:
           flutter-version: "3.22.3"
           channel: stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-expand
+            ~/.cargo/bin/flutter_rust_bridge_codegen
+          key: bridge-tools-linux-rust1.75-expand1.0.95-frb1.80.1
       - name: Generate FFI bridge
         working-directory: upstream/client
         run: |
-          cargo install cargo-expand --version 1.0.95 --locked
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          test -x "$HOME/.cargo/bin/cargo-expand" || cargo install cargo-expand --version 1.0.95 --locked
+          test -x "$HOME/.cargo/bin/flutter_rust_bridge_codegen" || cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
           sed -i 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
           (cd flutter && flutter pub get)
           flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
@@ -53,7 +59,7 @@ jobs:
     needs: bridge
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         role: [host, client]
         platform: [linux, windows, android]
@@ -264,9 +270,10 @@ jobs:
           mkdir release
           for role in host client; do
             case "$role" in host) app=SindreDeskHost;; client) app=SindreDeskClient;; esac
+            chmod +x "packages/SindreDesk-$role-linux-x64-ci/sindredesk-$role"
             tar -C "packages/SindreDesk-$role-linux-x64-ci" -czf "release/$app-linux-x64.tar.gz" .
             (cd "packages/SindreDesk-$role-windows-x64-ci" && zip -qr "../../release/$app-windows-x64.zip" .)
             cp "packages/SindreDesk-$role-android-arm64-ci/$app.apk" release/
           done
           (cd release && sha256sum *.apk *.zip *.tar.gz > SHA256SUMS-clients)
-          gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO"
+          gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO" --clobber
