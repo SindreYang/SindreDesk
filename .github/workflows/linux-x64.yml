@@ -71,8 +71,6 @@ jobs:
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
       - name: Build Linux x64 application
         working-directory: upstream/${{ matrix.role }}
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
         run: |
           python3 build.py --flutter --hwcodec --unix-file-copy-paste
           bundle="flutter/build/linux/x64/release/bundle"
