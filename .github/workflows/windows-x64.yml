@@ -83,10 +83,14 @@ jobs:
       - name: Build Windows x64 application
         working-directory: upstream/${{ matrix.role }}
         shell: pwsh
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+          VCPKGRS_TRIPLET: x64-windows-static
         run: |
           python build.py --flutter --hwcodec
           $bundle = "flutter/build/windows/x64/runner/Release"
-          if (!(Test-Path "$bundle/SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.exe")) {
+          $appName = if ("${{ matrix.role }}" -eq "host") { "SindreDeskHost" } else { "SindreDeskClient" }
+          if (!(Test-Path "$bundle/$appName.exe")) {
             throw "SindreDesk executable missing from build output"
           }
           if (!(Test-Path "$bundle/librustdesk.dll")) {
