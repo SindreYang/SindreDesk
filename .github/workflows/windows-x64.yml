@@ -58,6 +58,12 @@ jobs:
           $flutterRoot = "${{ steps.flutter.outputs.CACHE-PATH }}"
           $patch = "$env:GITHUB_WORKSPACE/upstream/${{ matrix.role }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
           git -C $flutterRoot apply $patch
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
