@@ -1,5 +1,7 @@
 name: Client build verification
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 permissions:
