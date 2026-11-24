@@ -119,6 +119,7 @@ class _SindreHomeState extends State<SindreHome> {
   Future<void> _settings() async {
     final saved = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => const _ServerSettings(),
     );
     if (mounted) {
@@ -372,6 +373,12 @@ class _ServerSettingsState extends State<_ServerSettings> {
       await bind.mainSetOption(key: 'relay-server', value: oldRelay);
       await bind.mainSetOption(key: 'api-server', value: oldApi);
       await bind.mainSetOption(key: 'key', value: oldKey);
+      if (bind.mainGetOptionSync(key: 'custom-rendezvous-server') != oldServer ||
+          bind.mainGetOptionSync(key: 'key') != oldKey ||
+          bind.mainGetOptionSync(key: 'relay-server') != oldRelay ||
+          bind.mainGetOptionSync(key: 'api-server') != oldApi) {
+        throw StateError('恢复配置未生效');
+      }
     }
     try {
       // 先清空旧公钥，切换地址期间禁止新连接。

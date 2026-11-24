@@ -205,3 +205,7 @@ bash scripts/test-server-integration.sh
 ### 控制端状态说明
 
 Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显示服务器可达/不可达/检测中；可达不表示公钥认证成功。Host 继续显示原生注册状态。每 5 秒检测，连接超时 3 秒。
+
+### 正式发布配置
+
+预发行版可以使用临时调试签名；稳定版必须在仓库 Actions Secrets 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，并在 Actions Variables 配置 `WINDOWS_ENGINE_SHA256`（可信来源核对的 64 位十六进制 SHA256）。签名配置不完整或引擎校验不一致时构建失败。不要提交证书、密码或私钥。正式签名与调试签名不同，旧测试 APK 可能需要先卸载。签名和哈希配置不是实机验收的替代。
