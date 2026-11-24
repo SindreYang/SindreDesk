@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           for status in queued in_progress; do
-            gh run list --repo "$GH_REPO" --branch "$PR_BRANCH" --status "$status" --limit 100 --json databaseId,workflowName --jq '.[] | select(.workflowName == "Android ARM64 client build" or .workflowName == "Linux x64 Host and Client build" or .workflowName == "Windows x64 Host and Client build" or .workflowName == "Client source integration") | .databaseId' |
+            gh run list --repo "$GH_REPO" --branch "$PR_BRANCH" --status "$status" --limit 100 --json databaseId,workflowName --jq '.[] | select(.workflowName == "Android ARM64 client build" or .workflowName == "Linux x64 Host and Client build" or .workflowName == "Windows x64 Host and Client build" or .workflowName == "Client source integration" or .workflowName == "Server foundation CI" or .workflowName == "Server integration") | .databaseId' |
               while IFS= read -r run_id; do
                 [ -n "$run_id" ] || continue
                 gh run cancel "$run_id" --repo "$GH_REPO" || true
