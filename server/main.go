@@ -9,6 +9,7 @@ import (
     "errors"
     "fmt"
     "log"
+    "net"
     "os"
     "os/exec"
     "os/signal"
@@ -66,11 +67,6 @@ func run() error {
     info, err := os.Lstat(dir)
     if err != nil { return err }
     if !info.IsDir() || info.Mode().Perm() & 0077 != 0 { return errors.New("数据目录必须为非符号链接且权限为 0700 或更严格") }
-    lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
-    if err != nil { return err }
-    defer lock.Close()
-    if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { return fmt.Errorf("无法获取数据目录锁: %w", err) }
-    defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
     if len(os.Args) == 2 && os.Args[1] == "key" {
         key, err := publicKey(dir)
         if err != nil { return err }
@@ -78,6 +74,11 @@ func run() error {
         return nil
     }
     if len(os.Args) != 1 { return errors.New("用法: SindreDeskServer [key]") }
+    lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+    if err != nil { return err }
+    defer lock.Close()
+    if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { return fmt.Errorf("无法获取数据目录锁: %w", err) }
+    defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
     // 在私有目录释放二进制，避免覆盖持久密钥及数据库。
     bin, err := os.MkdirTemp(dir, ".bin-")
     if err != nil { return err }
@@ -118,15 +119,36 @@ func run() error {
     }
     if err := start(ctx, hbbr, dir, results, "-k", "_"); err != nil { return err }
     running++
+    readyDeadline := time.NewTimer(20*time.Second)
+    defer readyDeadline.Stop()
+    for !portsReady() {
+        select {
+        case <-ctx.Done(): return nil
+        case r := <-results:
+            running--
+            return fmt.Errorf("%s 提前退出: %v", r.name, r.err)
+        case <-readyDeadline.C: return errors.New("等待 TCP 21115–21117 就绪超时")
+        case <-tick.C:
+        }
+    }
     fmt.Println("服务端公钥:", key)
     fmt.Println("数据目录:", dir)
-    fmt.Println("已启动两个子进程；尚未进行端口和协议就绪探测")
+    fmt.Println("TCP 21115–21117 已就绪；等待连接")
     select {
     case <-ctx.Done(): return nil
     case r := <-results:
         running--
         return fmt.Errorf("%s 退出: %v", r.name, r.err)
     }
+}
+
+func portsReady() bool {
+    for _, port := range []string{"21115", "21116", "21117"} {
+        conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 150*time.Millisecond)
+        if err != nil { return false }
+        conn.Close()
+    }
+    return true
 }
 
 func main() {
