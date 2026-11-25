@@ -238,6 +238,14 @@ def prepare(source, role):
             '''fn get_valid_subkey() -> String {
     get_subkey(&crate::get_app_name(), false)
 }'''))
+        # Resolve the protected Program Files directory from HKLM, not a user environment variable.
+        patch(source / "src/platform/windows.rs", lambda s: replace_regex(s,
+            r'^fn get_default_install_path\(\) -> String \{\n.*?^\}',
+            '''fn get_default_install_path() -> String {
+    let pf = get_reg_of(r"HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir");
+    let pf = if std::path::Path::new(&pf).is_absolute() { pf } else { r"C:\\Program Files".to_owned() };
+    format!(r"{}\\{}", pf, crate::get_app_name())
+}'''))
         # Restrict the native Windows installer to its normal protected install path.
         patch(source / "src/platform/windows.rs", lambda s: replace_once(s,
             '    let mut path = path.trim_end_matches(\'\\\\\').to_owned();',

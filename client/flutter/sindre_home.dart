@@ -495,8 +495,7 @@ class _FixedPasswordPanelState extends State<_FixedPasswordPanel> {
       final ok = await bind.mainSetPermanentPasswordWithResult(password: password);
       if (!ok) throw StateError('Password update failed');
       await gFFI.serverModel.setVerificationMethod(kUsePermanentPassword);
-      if (gFFI.serverModel.verificationMethod != kUsePermanentPassword &&
-          bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword) {
+      if (bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword) {
         throw StateError('Permanent verification mode unavailable');
       }
       await _read();
