@@ -7,16 +7,9 @@ pub(crate) fn record(event: &'static str, address: Option<SocketAddr>, port: Opt
     let role = if hbb_common::config::is_incoming_only() { "Host" } else { "Client" };
     let file_name = format!("SindreDesk{role}.log");
     let mut paths: Vec<PathBuf> = Vec::new();
-    // The portable launcher supplies its own parent directory, not the extraction cache.
-    // A system service does not depend on an interactive user's download path.
+    // Write beside the actual executable; fall back to the application log directory.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        if !std::env::args().any(|arg| arg == "--service" || arg == "--server") {
-            if let Some(dir) = std::env::var_os("SINDRE_LOG_DIR") {
-                let dir = PathBuf::from(dir);
-                if dir.is_absolute() { paths.push(dir); }
-            }
-        }
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() { paths.push(dir.to_path_buf()); }
         }

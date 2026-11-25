@@ -794,77 +794,6 @@ def patch_android_native(text):
         '        if config::is_outgoing_only() { return; }\n        log::debug!("startService from jvm");')
 
 
-def patch_windows_portable(source, role):
-    # Use the upstream embedded payload, but keep every role/build in a separate cache.
-    launcher = source / "libs/portable/src/main.rs"
-    app = "SindreDesk" + role.title()
-    text = launcher.read_text(encoding="utf-8")
-    text = replace_once(text, 'const APP_PREFIX: &str = "rustdesk";',
-        f'const APP_PREFIX: &str = "{app}-portable";')
-    text = replace_once(text, '            dir.join(APP_PREFIX)',
-        '''            dir.join(APP_PREFIX).join(format!("{:x}", md5::compute(include_bytes!("../data.bin"))))''')
-    # Never delete or overwrite a different running build's directory.
-    text = replace_once(text, '        std::fs::remove_dir_all(&dir).ok();',
-        '        // Different builds have different payload directories.')
-    text = replace_once(text, '            ui::setup();', '            // Do not show the upstream RustDesk-branded splash.')
-    text = replace_once(text, '        file.write_to_file(&dir);',
-        '        if file.write_to_file(&dir).is_err() { portable_diagnostic("extract-failed"); return None; }')
-    text = replace_once(text, 'fn main() {',
-        f'''fn portable_diagnostic(event: &str) {{
-    use std::io::Write;
-    if let Ok(exe) = std::env::current_exe() {{
-        if let Some(parent) = exe.parent() {{
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true)
-                .open(parent.join("{app}.log")) {{
-                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default().as_secs();
-                let _ = writeln!(file, "{{}} pid={{}} event={{}}", time, std::process::id(), event);
-            }}
-        }}
-    }}
-}}
-
-fn main() {{
-    portable_diagnostic("portable-start");''')
-    text = replace_once(text, '    let _child = cmd.spawn();',
-        '    let _child = cmd.spawn();\n    if _child.is_err() { portable_diagnostic("launch-failed"); std::process::exit(1); }')
-    text = replace_once(text, '        execute(exe, args, ui);\n    }',
-        '''        portable_diagnostic("extract-verified");
-        if args == vec!["--sindre-verify-package".to_owned()] {
-            std::process::exit(0);
-        }
-        execute(exe, args, ui);
-    } else {
-        portable_diagnostic("setup-failed");
-        std::process::exit(1);
-    }''')
-    text = replace_once(text, '    let mut cmd = Command::new(path);',
-        '''    let mut cmd = Command::new(&path);
-    if let Some(parent) = path.parent() { cmd.current_dir(parent); }
-    if let Some(parent) = exe.parent() { cmd.env("SINDRE_LOG_DIR", parent); }''')
-    # The runtime broker name is shared with upstream; do not kill unrelated RustDesk processes.
-    text = replace_regex(text, r'        let _allow_err = Command::new\("taskkill"\)\n.*?            \.output\(\);',
-        '        // Never terminate the original RustDesk broker.')
-    launcher.write_text(text, encoding="utf-8")
-    reader = source / "libs/portable/src/bin_reader.rs"
-    text = reader.read_text(encoding="utf-8")
-    text = replace_once(text, '    pub fn write_to_file(&self, prefix: &Path) {',
-        '    pub fn write_to_file(&self, prefix: &Path) -> std::io::Result<()> {')
-    text = replace_once(text, '                let _ = fs::create_dir_all(parent);', '                fs::create_dir_all(parent)?;')
-    text = replace_once(text, '                return;\n            } else {', '                return Ok(());\n            } else {')
-    text = replace_once(text, '        let _ = fs::write(p, self.decompress());',
-        '''        let data = self.decompress();
-        if format!("{:x}", md5::compute(&data)).as_bytes() != self.md5_code {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Portable payload checksum mismatch"));
-        }
-        fs::write(p, data)''')
-    reader.write_text(text, encoding="utf-8")
-    manifest = source / "libs/portable/Cargo.toml"
-    patch(manifest, lambda s: s.replace('ProductName = "RustDesk"', f'ProductName = "{app}"')
-        .replace('OriginalFilename = "rustdesk.exe"', f'OriginalFilename = "{app}.exe"')
-        .replace('FileDescription = "RustDesk Remote Desktop"', f'FileDescription = "{app}"'))
-
-
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
@@ -944,7 +873,6 @@ def prepare(source, role):
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
     patch_desktop_branding(source, role)
     patch_desktop_icons(source, role)
-    patch_windows_portable(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
     for path in (ROOT / "client/flutter").glob("*.dart"):
