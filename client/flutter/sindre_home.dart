@@ -12,7 +12,7 @@ import 'package:provider/provider.dart';
 import '../common.dart';
 import '../models/platform_model.dart';
 import '../models/peer_model.dart';
-import '../models/server_model.dart' show kUseTemporaryPassword, kUsePermanentPassword;
+import '../models/server_model.dart' show kUsePermanentPassword;
 import '../mobile/pages/server_page.dart' as mobile;
 
 bool validPublicKey(String value) {
@@ -60,23 +60,45 @@ bool validServer(String value) {
   return !RegExp(r'(^|\.)rustdesk\.com$', caseSensitive: false).hasMatch(host);
 }
 
-Widget _connectionValue(BuildContext context, String title, String value, {VoidCallback? refresh}) {
+Widget _connectionValue(BuildContext context, String title, String value,
+    {VoidCallback? edit, bool copy = true}) {
+  final theme = Theme.of(context);
   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(title, style: Theme.of(context).textTheme.labelLarge),
+    Text(title, style: theme.textTheme.labelMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant)),
+    const SizedBox(height: 4),
     Row(children: [
-      Expanded(child: SelectableText(value,
-        style: Theme.of(context).textTheme.headlineSmall)),
-      IconButton(
-        tooltip: '复制',
-        onPressed: () => Clipboard.setData(ClipboardData(text: value)),
-        icon: const Icon(Icons.copy_outlined),
-      ),
-      if (refresh != null)
-        IconButton(tooltip: '刷新密码', onPressed: refresh,
-          icon: const Icon(Icons.refresh)),
+      Expanded(child: SelectableText(value, style: theme.textTheme.headlineMedium
+          ?.copyWith(fontWeight: FontWeight.w500))),
+      if (edit != null)
+        IconButton(tooltip: '修改密码', onPressed: edit,
+          icon: const Icon(Icons.edit_outlined, size: 20)),
+      if (copy)
+        IconButton(tooltip: '复制', onPressed: value.isEmpty ? null :
+          () => Clipboard.setData(ClipboardData(text: value)),
+          icon: const Icon(Icons.copy_outlined, size: 20)),
     ]),
-    const SizedBox(height: 12),
   ]);
+}
+
+Widget _surfaceCard(BuildContext context, Widget child) => Container(
+  padding: const EdgeInsets.all(20),
+  decoration: BoxDecoration(
+    color: Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF21242A) : Colors.white,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+  ),
+  child: child,
+);
+
+String _lanIp(String value) => value.trim().split(':').first;
+
+String _savedFingerprint(String address) {
+  final ip = _lanIp(address);
+  final saved = bind.mainGetOptionSync(key: 'sindre-lan-peer-fingerprint:$ip');
+  return validFingerprint(saved) ? saved : bind.mainGetOptionSync(
+      key: 'sindre-lan-peer-fingerprint:$ip:21118');
 }
 
 class SindreHome extends StatefulWidget {
@@ -89,15 +111,11 @@ class SindreHome extends StatefulWidget {
 class _SindreHomeState extends State<SindreHome> {
   final _id = TextEditingController();
   final _password = TextEditingController();
-  final _fingerprint = TextEditingController();
   Timer? _timer;
   Timer? _lanScanTimer;
   bool _busy = false;
   bool _showPassword = false;
   String _message = '';
-  bool? _reachable;
-  int _probeGeneration = 0;
-  bool _probing = false;
 
   bool get host => bind.isIncomingOnly();
   bool get configured =>
@@ -111,14 +129,9 @@ class _SindreHomeState extends State<SindreHome> {
       // 保留原生连接管理窗口，确保桌面被控者可断开会话。
       gFFI.serverModel.hideCm = false;
       unawaited(gFFI.serverModel.setApproveMode('password'));
-      unawaited(gFFI.serverModel.setVerificationMethod(
-          DesktopAutostart.supported ? kUsePermanentPassword : kUseTemporaryPassword));
+      unawaited(gFFI.serverModel.setVerificationMethod(kUsePermanentPassword));
     }
     if (!host) {
-      unawaited(_probeServer());
-      _timer = Timer.periodic(const Duration(seconds: 5), (_) {
-        unawaited(_probeServer());
-      });
       _scanLan();
       _lanScanTimer = Timer.periodic(const Duration(seconds: 15), (_) => _scanLan());
     }
@@ -136,67 +149,22 @@ class _SindreHomeState extends State<SindreHome> {
     _timer?.cancel();
     _id.dispose();
     _password.dispose();
-    _fingerprint.dispose();
     _lanScanTimer?.cancel();
     super.dispose();
-  }
-
-  // 控制端不注册为被控设备；仅探测私服 TCP 可达性。
-  Future<void> _probeServer() async {
-    if (_probing || !mounted || host) return;
-    if (!configured) {
-      if (_reachable != null) setState(() => _reachable = null);
-      return;
-    }
-    final address = bind.mainGetOptionSync(key: 'custom-rendezvous-server').trim();
-    final generation = _probeGeneration;
-    _probing = true;
-    bool reachable = false;
-    Socket? socket;
-    try {
-      socket = await Socket.connect(address, 21116,
-          timeout: const Duration(seconds: 3));
-      reachable = true;
-    } catch (_) {
-      reachable = false;
-    } finally {
-      socket?.destroy();
-      _probing = false;
-      if (mounted && generation == _probeGeneration &&
-          address == bind.mainGetOptionSync(key: 'custom-rendezvous-server').trim()) {
-        setState(() => _reachable = reachable);
-      }
-    }
   }
 
   Future<void> _settings() async {
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const _ServerSettings(),
+      builder: (_) => _ServerSettings(host: host),
     );
     if (mounted) {
-      _probeGeneration++;
-      setState(() {
-        _reachable = null;
-        if (saved == true) _message = '';
-      });
-      if (!host) unawaited(_probeServer());
+      setState(() { if (saved == true) _message = ''; });
     }
   }
 
-  void _onIdChanged(String value) {
-    final address = value.replaceAll(' ', '').trim();
-    if (_isPrivateLanAddress(address)) {
-      final saved = bind.mainGetOptionSync(
-        key: 'sindre-lan-peer-fingerprint:$address',
-      );
-      if (saved.isNotEmpty) _fingerprint.text = saved;
-    } else {
-      _fingerprint.clear();
-    }
-    setState(() {});
-  }
+  void _onIdChanged(String value) => setState(() => _message = '');
 
   void _scanLan() {
     if (!mounted || host) return;
@@ -204,42 +172,81 @@ class _SindreHomeState extends State<SindreHome> {
     bind.mainDiscover();
   }
 
-  Future<void> _selectLanPeer(Peer peer) async {
-    if (peer.ip.isEmpty || !validFingerprint(peer.fingerprint)) return;
-    final address = '${peer.ip}:21118';
-    final accepted = await showDialog<bool>(
+  Future<bool> _confirmIdentity(String address, {String advertised = ''}) async {
+    final ip = _lanIp(address);
+    final saved = _savedFingerprint(ip);
+    if (validFingerprint(saved) &&
+        (advertised.isEmpty || saved.toLowerCase() == advertised.toLowerCase())) {
+      await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip',
+          value: saved.toLowerCase());
+      return true;
+    }
+    String entered = '';
+    final accepted = await showDialog<String>(
       context: context,
-      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('核对局域网设备'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
-            const SizedBox(height: 8),
-            SelectableText(address),
-            const SizedBox(height: 8),
-            const Text('请与被控端屏幕显示的设备指纹逐字符核对。指纹不一致时不要继续。'),
-            const SizedBox(height: 8),
-            SelectableText(peer.fingerprint),
+        title: const Text('确认设备身份'),
+        scrollable: true,
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('在被控端点击右下角 IP，复制完整设备指纹并粘贴到这里。'),
+          const SizedBox(height: 12),
+          TextField(onChanged: (value) => entered = value, autocorrect: false,
+            enableSuggestions: false, maxLines: 3,
+            decoration: const InputDecoration(labelText: '设备指纹',
+              border: OutlineInputBorder())),
+          if (advertised.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('发现的设备指纹（必须与被控端一致）'),
+            SelectableText(advertised),
           ],
-        ),
+        ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true),
-            child: const Text('已核对，使用此设备')),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(onPressed: () {
+            final value = entered.replaceAll(RegExp(r'[:\s]'), '').toLowerCase();
+            if (validFingerprint(value) &&
+                (advertised.isEmpty || value == advertised.toLowerCase())) {
+              Navigator.pop(context, value);
+            } else {
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(content: Text('指纹无效或不一致，请重新核对')));
+            }
+          }, child: const Text('确认')),
         ],
       ),
     );
-    if (accepted == true && mounted) {
-      setState(() {
-        _id.text = address;
-        _fingerprint.text = peer.fingerprint;
-        _message = '';
-      });
+    if (accepted == null || !mounted) return false;
+    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip', value: accepted);
+    return true;
+  }
+
+  Future<void> _selectLanPeer(Peer peer) async {
+    if (_busy || !_isPrivateIPv4(peer.ip) || !validFingerprint(peer.fingerprint)) return;
+    setState(() => _busy = true);
+    try {
+      if (!await _confirmIdentity(peer.ip, advertised: peer.fingerprint) || !mounted) return;
+      setState(() { _id.text = peer.ip; _message = ''; });
+    } catch (_) {
+      if (mounted) setState(() => _message = '无法保存设备身份，请重试');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _forgetIdentity() async {
+    if (_busy || !_isPrivateLanAddress(_id.text)) return;
+    final ip = _lanIp(_id.text);
+    final confirm = await showDialog<bool>(context: context, builder: (context) =>
+      AlertDialog(title: const Text('重新核对设备身份？'),
+        content: const Text('下次连接时需要重新核对被控端设备指纹。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('重新核对')),
+        ]));
+    if (confirm != true || !mounted) return;
+    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip', value: '');
+    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip:21118', value: '');
+    if (mounted) setState(() {});
   }
 
   Future<void> _connect() async {
@@ -247,39 +254,31 @@ class _SindreHomeState extends State<SindreHome> {
     final id = _id.text.replaceAll(' ', '').trim();
     final password = _password.text;
     final direct = _isPrivateLanAddress(id);
-    if (direct) {
-      final fingerprint = _fingerprint.text
-          .replaceAll(RegExp(r'[:\s]'), '')
-          .trim()
-          .toLowerCase();
-      if (!validFingerprint(fingerprint)) {
-        setState(() => _message = '请填写并核对被控端显示的 64 位设备指纹');
-        return;
-      }
-      await bind.mainSetOption(
-        key: 'sindre-lan-peer-fingerprint:${id}',
-        value: fingerprint,
-      );
-    } else {
-      if (!RegExp(r'^[0-9]+$').hasMatch(id)) {
-        setState(() => _message = '请输入连接码或局域网 IPv4 地址');
-        return;
-      }
-      if (!configured) {
-        setState(() => _message = '连接码需要配置私有服务器；局域网可直接使用 IP 地址');
-        return;
-      }
+    if (!direct && !RegExp(r'^[0-9]+$').hasMatch(id)) {
+      setState(() => _message = '请输入连接码或局域网 IP 地址');
+      return;
+    }
+    if (!direct && !configured) {
+      setState(() => _message = '使用连接码前请在右上角配置服务器');
+      return;
     }
     if (password.isEmpty) {
       setState(() => _message = '请输入连接密码');
       return;
     }
     setState(() { _busy = true; _message = ''; });
-    _password.clear();
     try {
-      await connect(context, id, password: password);
-    } catch (error) {
-      if (mounted) setState(() => _message = '连接失败：${error.toString()}');
+      if (direct) {
+        final ip = _lanIp(id);
+        final matches = gFFI.lanPeersModel.peers.where((peer) =>
+            peer.ip == ip && validFingerprint(peer.fingerprint)).toList();
+        final advertised = matches.isEmpty ? '' : matches.first.fingerprint;
+        if (!await _confirmIdentity(id, advertised: advertised) || !mounted) return;
+      }
+      _password.clear();
+      await connect(context, direct ? _lanIp(id) : id, password: password);
+    } catch (_) {
+      if (mounted) setState(() => _message = '连接失败，请检查对方设备及连接信息');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -290,72 +289,32 @@ class _SindreHomeState extends State<SindreHome> {
     children: [
       Row(children: [
         Expanded(child: Text('局域网设备', style: Theme.of(context).textTheme.titleSmall)),
-        TextButton.icon(
-          onPressed: _scanLan,
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('扫描'),
-        ),
+        IconButton(tooltip: '刷新设备', onPressed: _scanLan,
+          icon: const Icon(Icons.refresh, size: 20)),
       ]),
       AnimatedBuilder(
         animation: gFFI.lanPeersModel,
         builder: (context, _) {
-          final peers = gFFI.lanPeersModel.peers
-              .where((peer) => peer.ip.isNotEmpty)
-              .take(8)
-              .toList();
-          if (peers.isEmpty) {
-            return const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text('尚未发现设备。请确认两端处于同一局域网，并允许 UDP 21119。'),
-            );
-          }
+          final peers = gFFI.lanPeersModel.peers.where((peer) =>
+              _isPrivateIPv4(peer.ip) && validFingerprint(peer.fingerprint)).take(8).toList();
+          if (peers.isEmpty) return Text('暂未发现设备', style: Theme.of(context).textTheme.bodySmall);
           return Column(children: [
             for (final peer in peers)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
-                subtitle: Text(
-                  "${peer.ip}:21118\n${validFingerprint(peer.fingerprint) ? peer.fingerprint : '此设备不支持安全直连'}",
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: TextButton(
-                  onPressed: validFingerprint(peer.fingerprint)
-                      ? () => _selectLanPeer(peer)
-                      : null,
-                  child: const Text('使用'),
-                ),
-              ),
+              Padding(padding: const EdgeInsets.only(bottom: 6),
+                child: _surfaceCard(context, ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.computer_outlined),
+                  title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(peer.ip),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _busy ? null : () => _selectLanPeer(peer),
+                ))),
           ]);
         },
       ),
-      const SizedBox(height: 8),
     ],
-  );
-  Widget _serverStatus({bool compact = false}) => AnimatedBuilder(
-    animation: gFFI.serverModel,
-    builder: (context, _) {
-      final status = gFFI.serverModel.connectStatus;
-      final ready = configured && (host ? status > 0 : _reachable == true);
-      final failed = host ? status < 0 : _reachable == false;
-      final label = !configured
-          ? (host ? '未配置服务器 · 局域网直连' : '未配置服务器 · 可扫描局域网') :
-          ready ? (host ? '服务器已连接' : '服务器可达') :
-          failed ? (host ? '服务器未就绪' : '服务器不可达') :
-          host ? '正在连接服务器' : '正在检测服务器';
-      final color = ready ? Colors.green :
-          !configured ? Theme.of(context).colorScheme.outline :
-          failed ? Theme.of(context).colorScheme.error : Colors.orange;
-      return Padding(
-        padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 20, vertical: compact ? 6 : 10),
-        child: Row(children: [
-          Icon(Icons.circle, size: 10, color: color),
-          const SizedBox(width: 8),
-          Expanded(child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
-        ]),
-      );
-    },
   );
 
   Widget _hostDesktop() {
@@ -365,233 +324,104 @@ class _SindreHomeState extends State<SindreHome> {
       builder: (_, __) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _connectionValue(context, '本机连接码（服务器连接）', model.serverId.text),
-          const _LanConnectionInfo(),
-          if (DesktopAutostart.supported)
-            const _FixedPasswordPanel()
-          else
-            _connectionValue(context, '连接密码', model.serverPasswd.text,
-              refresh: () => bind.mainUpdateTemporaryPassword()),
-          const Text('远程会话可在连接管理窗口中断开。'),
-          if (DesktopAutostart.supported) const _DesktopAutostartSwitch(),
+          _connectionValue(context, '本机连接码', model.serverId.text),
+          const Divider(height: 24),
+          const _FixedPasswordPanel(),
         ],
       ),
     );
   }
 
-  Widget _client() => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      TextField(
-        controller: _id,
-        decoration: const InputDecoration(
-          labelText: '连接码 / 局域网 IP',
-          hintText: '连接码或 192.168.1.20:21118',
-          border: OutlineInputBorder(),
-        ),
-        keyboardType: TextInputType.text,
-        onChanged: _onIdChanged,
-      ),
-      if (_isPrivateLanAddress(_id.text)) ...[
-        const SizedBox(height: 12),
-        TextField(
-          controller: _fingerprint,
-          autocorrect: false,
-          enableSuggestions: false,
-          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F: ]'))],
-          decoration: const InputDecoration(
-            labelText: '设备指纹（请与被控端核对）',
-            hintText: '64 位 SHA-256 指纹',
-            border: OutlineInputBorder(),
-          ),
-        ),
-      ],
-      const SizedBox(height: 16),
-      TextField(
-        controller: _password,
-        obscureText: true,
-        autocorrect: false,
-        enableSuggestions: false,
-        decoration: const InputDecoration(labelText: '连接密码', border: OutlineInputBorder()),
-        onSubmitted: (_) => _connect(),
-      ),
+  Widget _client() {
+    final border = OutlineInputBorder(borderRadius: BorderRadius.circular(8));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _surfaceCard(context, Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('连接码或 IP 地址', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 8),
+        TextField(controller: _id, enabled: !_busy,
+          keyboardType: TextInputType.text, textInputAction: TextInputAction.next,
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.: ]'))],
+          onChanged: _onIdChanged,
+          decoration: InputDecoration(hintText: '输入连接码或 IP 地址',
+            isDense: true, border: border,
+            suffixIcon: _isPrivateLanAddress(_id.text) ? IconButton(
+              tooltip: '重新核对设备身份', onPressed: _forgetIdentity,
+              icon: const Icon(Icons.verified_user_outlined, size: 20)) : null)),
+        const SizedBox(height: 16),
+        Text('连接密码', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 8),
+        TextField(controller: _password, enabled: !_busy,
+          obscureText: !_showPassword, autocorrect: false, enableSuggestions: false,
+          textInputAction: TextInputAction.done, onSubmitted: (_) => _connect(),
+          decoration: InputDecoration(hintText: '输入对方设备密码', isDense: true, border: border,
+            suffixIcon: IconButton(tooltip: _showPassword ? '隐藏密码' : '显示密码',
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+              icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20)))),
+        const SizedBox(height: 18),
+        FilledButton(style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF1769D2), foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(44),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          onPressed: _busy ? null : _connect,
+          child: Text(_busy ? '连接中…' : '连接设备')),
+        if (_message.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 10), child: Text(_message,
+            style: TextStyle(color: Theme.of(context).colorScheme.error))),
+      ])),
       const SizedBox(height: 12),
       _lanDiscoveryPanel(),
-      FilledButton(onPressed: _busy ? null : _connect, child: const Text('连接')),
-      if (_message.isNotEmpty) Padding(
-        padding: const EdgeInsets.only(top: 12),
-        child: Text(_message, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-    ],
-  );
-
-  Widget _desktopClient() {
-    final colors = Theme.of(context).colorScheme;
-    final border = OutlineInputBorder(borderRadius: BorderRadius.circular(8));
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text('连接码', style: Theme.of(context).textTheme.labelLarge),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _id,
-          keyboardType: TextInputType.text,
-          textInputAction: TextInputAction.next,
-          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.:]'))],
-          onChanged: _onIdChanged,
-          decoration: InputDecoration(
-            hintText: '连接码或 192.168.1.20:21118',
-            isDense: true,
-            prefixIcon: const Icon(Icons.computer_outlined, size: 20),
-            border: border,
-          ),
-        ),
-        if (_isPrivateLanAddress(_id.text)) ...[
-          const SizedBox(height: 12),
-          Text('设备指纹（请与被控端核对）', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _fingerprint,
-            autocorrect: false,
-            enableSuggestions: false,
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F: ]'))],
-            decoration: InputDecoration(
-              hintText: '64 位 SHA-256 指纹',
-              isDense: true,
-              border: border,
-            ),
-          ),
-        ],
-        const SizedBox(height: 14),
-        Text('连接密码', style: Theme.of(context).textTheme.labelLarge),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _password,
-          obscureText: !_showPassword,
-          autocorrect: false,
-          enableSuggestions: false,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _connect(),
-          decoration: InputDecoration(
-            hintText: '输入对方设备密码',
-            isDense: true,
-            prefixIcon: const Icon(Icons.lock_outline, size: 20),
-            suffixIcon: IconButton(
-              tooltip: _showPassword ? '隐藏密码' : '显示密码',
-              onPressed: () => setState(() => _showPassword = !_showPassword),
-              icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
-            ),
-            border: border,
-          ),
-        ),
-        const SizedBox(height: 12),
-        _lanDiscoveryPanel(),
-        const SizedBox(height: 8),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF1769D2),
-            foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(42),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          onPressed: _busy ? null : _connect,
-          child: Text(_busy ? '连接中…' : '连接'),
-        ),
-        if (_message.isNotEmpty)
-          Padding(padding: const EdgeInsets.only(top: 10),
-            child: Text(_message, style: TextStyle(color: colors.error))),
-      ],
-    );
-  }
-
-  Widget _desktopHome(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final background = theme.brightness == Brightness.dark
-        ? const Color(0xFF17191D) : const Color(0xFFF4F6F9);
-    final surface = theme.brightness == Brightness.dark
-        ? const Color(0xFF21242A) : Colors.white;
-    return Scaffold(
-      backgroundColor: background,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(children: [
-                    Expanded(child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(host ? '本机设备' : '远程连接',
-                          style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 2),
-                        Text(host ? '允许其他设备连接本机' : '输入被控设备的连接信息',
-                          style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
-                      ],
-                    )),
-                    IconButton(
-                      tooltip: '服务器设置',
-                      onPressed: _settings,
-                      icon: const Icon(Icons.settings_outlined),
-                    ),
-                  ]),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: colors.outlineVariant),
-                    ),
-                    child: host ? _hostDesktop() : _desktopClient(),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Expanded(child: _serverStatus(compact: true)),
-                    if (!configured)
-                      TextButton(onPressed: _settings, child: const Text('配置服务器')),
-                  ]),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (isDesktop) return _desktopHome(context);
-    // Android 被控复用原生权限检查、共享授权和会话断开组件。
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final background = theme.brightness == Brightness.dark
+        ? const Color(0xFF17191D) : const Color(0xFFF4F6F9);
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: Text(host ? 'SindreDesk Host' : 'SindreDesk Client'),
-        actions: [
-          IconButton(tooltip: '服务器设置', icon: const Icon(Icons.settings_outlined),
-            onPressed: _settings),
-        ],
-      ),
-      bottomNavigationBar: SafeArea(child: _serverStatus()),
-      body: host && isAndroid
-          ? const _AndroidHostPanel()
-          : Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: host ? _hostDesktop() : _client(),
-                ),
-              ),
-            ),
+      backgroundColor: background,
+      bottomNavigationBar: host ? SafeArea(child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+        child: Row(children: [
+          Expanded(child: AnimatedBuilder(animation: gFFI.serverModel, builder: (_, __) {
+            final model = gFFI.serverModel;
+            final connected = model.clients.any((client) => !client.disconnected);
+            final stopped = isAndroid && !model.isStart;
+            final status = stopped ? '未启动共享' : connected ? '连接中' : '等待连接';
+            return Row(children: [
+              Icon(Icons.circle, size: 8, color: stopped ? colors.outline : Colors.green),
+              const SizedBox(width: 6),
+              Flexible(child: Text(status, style: theme.textTheme.bodySmall)),
+            ]);
+          })),
+          const _LanConnectionInfo(),
+        ]),
+      )) : null,
+      body: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+        child: Center(child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(host ? '本机设备' : '远程控制',
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(host ? '允许其他设备连接本机' : '连接其他设备',
+                  style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
+              ])),
+              IconButton(tooltip: '设置', onPressed: _settings, icon: const Icon(Icons.settings_outlined)),
+            ]),
+            const SizedBox(height: 16),
+            if (host) _surfaceCard(context, _hostDesktop()) else _client(),
+            if (host && isAndroid) const _AndroidHostPanel(),
+          ]),
+        )),
+      )),
     );
   }
 }
-
 
 class _LanConnectionInfo extends StatefulWidget {
   const _LanConnectionInfo();
@@ -609,7 +439,7 @@ class _LanConnectionInfoState extends State<_LanConnectionInfo> {
   void initState() {
     super.initState();
     _refresh();
-    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _refresh());
   }
 
   @override
@@ -618,75 +448,111 @@ class _LanConnectionInfoState extends State<_LanConnectionInfo> {
     super.dispose();
   }
 
-  Future<void> _refresh() async {
+  // 优先采用系统默认路由对应的物理网络，不按 IP 网段猜测。
+  bool _virtual(String name) => RegExp(
+      r'vethernet|hyper-v|wsl|docker|vbox|vmware|virtual|tailscale|zerotier|wireguard|(^|\W)(tun|tap|utun|virbr|veth|br-)',
+      caseSensitive: false).hasMatch(name);
+
+  Future<String?> _defaultAddress(List<NetworkInterface> interfaces) async {
     try {
-      final interfaces = await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLoopback: false,
-      );
-      final addresses = interfaces
-          .expand((interface) => interface.addresses)
-          .map((address) => address.address)
-          .where(_isPrivateIPv4)
-          .toSet()
-          .toList()
-        ..sort();
+      if (Platform.isWindows) {
+        final result = await Process.run('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          r'''$physical = @(Get-NetAdapter -Physical | Where-Object Status -eq Up | Select-Object -ExpandProperty ifIndex); Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $physical -contains $_.InterfaceIndex } | Sort-Object { $_.NetIPv4Interface.InterfaceMetric } | ForEach-Object { $_.IPv4Address.IPAddress }''',
+        ]).timeout(const Duration(seconds: 5));
+        if (result.exitCode == 0) {
+          for (final ip in result.stdout.toString().split(RegExp(r'\s+'))) {
+            if (_isPrivateIPv4(ip)) return ip;
+          }
+        }
+      } else if (Platform.isLinux) {
+        final result = await Process.run('ip', ['-4', 'route', 'show', 'default'])
+          .timeout(const Duration(seconds: 3));
+        if (result.exitCode == 0) {
+          for (final line in result.stdout.toString().split('\n')) {
+            final name = RegExp(r'\bdev\s+(\S+)').firstMatch(line)?.group(1);
+            if (name == null || _virtual(name)) continue;
+            for (final interface in interfaces.where((item) => item.name == name)) {
+              for (final address in interface.addresses) {
+                if (_isPrivateIPv4(address.address)) return address.address;
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // 缺少系统命令或权限时回退到接口名称排序。
+    }
+    return null;
+  }
+
+  bool _refreshing = false;
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    _refreshing = true;
+    try {
+      final interfaces = (await NetworkInterface.list(type: InternetAddressType.IPv4,
+          includeLoopback: false)).toList();
+      int priority(NetworkInterface item) {
+        if (_virtual(item.name)) return 2;
+        if (RegExp(r'eth|en[opsx]|wlan|wi-fi|wifi|ethernet', caseSensitive: false)
+            .hasMatch(item.name)) return 0;
+        return 1;
+      }
+      interfaces.sort((a, b) => priority(a).compareTo(priority(b)));
+      final addresses = interfaces.expand((item) => item.addresses)
+          .map((address) => address.address).where(_isPrivateIPv4).toSet().toList();
+      final preferred = await _defaultAddress(interfaces);
+      if (preferred != null && addresses.contains(preferred)) {
+        addresses.remove(preferred);
+        addresses.insert(0, preferred);
+      }
       final fingerprint = bind.mainGetOptionSync(key: 'sindre-lan-fingerprint');
       if (mounted && (addresses.join(',') != _addresses.join(',') ||
           fingerprint != _fingerprint)) {
-        setState(() {
-          _addresses = addresses;
-          _fingerprint = fingerprint;
-        });
+        setState(() { _addresses = addresses; _fingerprint = fingerprint; });
       }
     } catch (_) {
-      // Network enumeration may be temporarily unavailable while interfaces change.
+      // Network enumeration may be temporarily unavailable.
+    } finally {
+      _refreshing = false;
     }
   }
 
-  Widget _copyable(String label, String value) => Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelMedium),
-          SelectableText(value, style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      )),
-      IconButton(
-        tooltip: '复制',
-        onPressed: value.isEmpty ? null : () => Clipboard.setData(ClipboardData(text: value)),
-        icon: const Icon(Icons.copy_outlined, size: 18),
-      ),
-    ],
-  );
+  Widget _copyable(String label, String value) => Row(children: [
+    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: Theme.of(context).textTheme.labelMedium),
+      SelectableText(value),
+    ])),
+    IconButton(tooltip: '复制', onPressed: value.isEmpty ? null :
+      () => Clipboard.setData(ClipboardData(text: value)), icon: const Icon(Icons.copy_outlined, size: 18)),
+  ]);
+
+  Future<void> _details() async {
+    await showDialog<void>(context: context, builder: (context) => AlertDialog(
+      title: const Text('本机网络信息'), scrollable: true,
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final address in _addresses) _copyable('局域网 IP', address),
+        if (_addresses.isEmpty) const Text('未检测到局域网地址'),
+        const SizedBox(height: 12),
+        if (_fingerprint.isEmpty) const Text('设备指纹将在共享服务启动后显示')
+        else _copyable('设备指纹', _fingerprint),
+        const SizedBox(height: 8),
+        const Text('首次连接请与控制端核对完整指纹。'),
+      ]),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))],
+    ));
+  }
 
   @override
-  Widget build(BuildContext context) {
-    final addresses = _addresses.map((address) => '$address:21118').join('\n');
-    return Container(
-      margin: const EdgeInsets.only(top: 12, bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withOpacity(0.92),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('局域网直连', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 4),
-          const Text('无需配置服务器。控制端输入以下地址和密码，并核对设备指纹。'),
-          const SizedBox(height: 8),
-          _copyable('本机局域网地址', addresses.isEmpty ? '未检测到可用的私有 IPv4 地址' : addresses),
-          _copyable('设备指纹（SHA-256）',
-            _fingerprint.isEmpty ? '共享服务启动后生成' : _fingerprint),
-          const Text('首次连接必须核对完整指纹；只在可信的局域网内开放 21118/TCP 和 21119/UDP。'),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => InkWell(
+    onTap: _details,
+    borderRadius: BorderRadius.circular(4),
+    child: Padding(padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+      child: Text(_addresses.isEmpty ? '无局域网' : _addresses.first,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant))),
+  );
 }
 
 class _AndroidHostPanel extends StatefulWidget {
@@ -717,65 +583,27 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return ChangeNotifierProvider.value(
-      value: gFFI.serverModel,
-      child: SingleChildScrollView(
-        child: Column(
-          children: [
-            AnimatedBuilder(
-              animation: gFFI.serverModel,
-              builder: (context, _) {
-                final model = gFFI.serverModel;
-                return Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _connectionValue(context, '本机连接码（服务器连接）', model.serverId.text),
-                      const _LanConnectionInfo(),
-                      _connectionValue(context, '连接密码', model.serverPasswd.text,
-                        refresh: model.isStart
-                            ? () => bind.mainUpdateTemporaryPassword()
-                            : null),
-                      if (!model.isStart) mobile.ServiceNotRunningNotification(),
-                    ],
-                  ),
-                );
-              },
-            ),
-            AnimatedBuilder(
-              animation: gFFI.serverModel,
-              builder: (_, __) => Column(children: [
-                for (final client in gFFI.serverModel.clients.where(
-                    (c) => !c.disconnected))
-                  ListTile(
-                    title: Text('会话 ${client.peerId}'),
-                    trailing: TextButton(
-                      onPressed: () => bind.cmCloseConnection(connId: client.id),
-                      child: const Text('断开连接'),
-                    ),
-                  ),
-                if (gFFI.serverModel.isStart)
-                  OutlinedButton(
-                    onPressed: () => gFFI.serverModel.stopService(),
-                    child: const Text('停止共享'),
-                  ),
-              ]),
-            ),
-            ExpansionTile(
-              title: const Text('系统权限'),
-              children: const [mobile.PermissionChecker()],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ChangeNotifierProvider.value(
+    value: gFFI.serverModel,
+    child: AnimatedBuilder(animation: gFFI.serverModel, builder: (_, __) {
+      final model = gFFI.serverModel;
+      return Column(children: [
+        if (!model.isStart) mobile.ServiceNotRunningNotification(),
+        for (final client in model.clients.where((c) => !c.disconnected))
+          ListTile(title: Text('会话 ${client.peerId}'),
+            trailing: TextButton(onPressed: () => bind.cmCloseConnection(connId: client.id),
+              child: const Text('断开连接'))),
+        if (model.isStart)
+          OutlinedButton(onPressed: () => model.stopService(), child: const Text('停止共享')),
+        ExpansionTile(title: const Text('系统权限'), children: const [mobile.PermissionChecker()]),
+      ]);
+    }),
+  );
 }
 
 class _ServerSettings extends StatefulWidget {
-  const _ServerSettings();
+  const _ServerSettings({required this.host});
+  final bool host;
 
   @override
   State<_ServerSettings> createState() => _ServerSettingsState();
@@ -799,7 +627,8 @@ class _ServerSettingsState extends State<_ServerSettings> {
     if (_busy) return;
     final server = _server.text.trim();
     final key = _key.text.trim();
-    if (!validServer(server) || !validPublicKey(key)) {
+    final clear = server.isEmpty && key.isEmpty;
+    if (!clear && (!validServer(server) || !validPublicKey(key))) {
       setState(() => _error = '请输入有效的服务器 IPv4 / 域名及 32 字节 Base64 公钥');
       return;
     }
@@ -824,8 +653,15 @@ class _ServerSettingsState extends State<_ServerSettings> {
     try {
       // 先清空旧公钥，切换地址期间禁止新连接。
       await bind.mainSetOption(key: 'key', value: '');
-      final ok = await setServerConfig(null, null,
-        ServerConfig(idServer: server, key: key));
+      bool ok;
+      if (clear) {
+        await bind.mainSetOption(key: 'custom-rendezvous-server', value: '');
+        await bind.mainSetOption(key: 'relay-server', value: '');
+        await bind.mainSetOption(key: 'api-server', value: '');
+        ok = true;
+      } else {
+        ok = await setServerConfig(null, null, ServerConfig(idServer: server, key: key));
+      }
       if (!ok || bind.mainGetOptionSync(key: 'custom-rendezvous-server') != server ||
           bind.mainGetOptionSync(key: 'key') != key) {
         throw StateError('配置未完整保存');
@@ -850,10 +686,12 @@ class _ServerSettingsState extends State<_ServerSettings> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('服务器设置'),
+    title: const Text('设置'),
+    scrollable: true,
     content: SizedBox(width: 380, child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        const Text('服务器配置（跨网络连接）'),
         TextField(controller: _server,
           decoration: const InputDecoration(labelText: '服务器 IP / 域名')),
         const SizedBox(height: 12),
@@ -861,6 +699,10 @@ class _ServerSettingsState extends State<_ServerSettings> {
           decoration: const InputDecoration(labelText: '服务器公钥')),
         if (_error != null) Padding(
           padding: const EdgeInsets.only(top: 12), child: Text(_error!)),
+        if (widget.host && DesktopAutostart.supported) ...[
+          const Divider(height: 24),
+          const _DesktopAutostartSwitch(),
+        ],
       ],
     )),
     actions: [
@@ -872,88 +714,91 @@ class _ServerSettingsState extends State<_ServerSettings> {
 }
 
 
-/// 原生永久密码只保存验证数据，不在 Flutter 中另存明文。
+/// 永久密码验证仍由原生服务完成；只读取本机加密缓存。
 class _FixedPasswordPanel extends StatefulWidget {
   const _FixedPasswordPanel();
-
   @override
   State<_FixedPasswordPanel> createState() => _FixedPasswordPanelState();
 }
 
 class _FixedPasswordPanelState extends State<_FixedPasswordPanel> {
   bool _busy = false;
-  bool? _ready;
+  String _state = 'unavailable';
+  String _password = '';
+  Timer? _retry;
 
   @override
   void initState() {
     super.initState();
     unawaited(_read());
+    _retry = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!_busy) unawaited(_read());
+    });
+  }
+
+  @override
+  void dispose() {
+    _retry?.cancel();
+    super.dispose();
+  }
+
+  String _randomPassword() {
+    final random = Random.secure();
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    return List.generate(6, (_) => alphabet[random.nextInt(alphabet.length)]).join();
   }
 
   Future<void> _read() async {
+    if (_busy || !bind.isIncomingOnly()) return;
+    _busy = true;
     try {
-      final ready = await bind.mainGetCommon(key: 'permanent-password-set') == 'true';
-      if (mounted) setState(() => _ready = ready);
+      if (bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword) {
+        await gFFI.serverModel.setVerificationMethod(kUsePermanentPassword);
+      }
+      var state = await bind.mainGetCommon(key: 'sindre-fixed-password');
+      if (state == 'missing') {
+        final ok = await bind.mainSetPermanentPasswordWithResult(password: _randomPassword());
+        state = ok ? await bind.mainGetCommon(key: 'sindre-fixed-password') : 'unavailable';
+      }
+      if (mounted) setState(() {
+        _state = state.startsWith('ready:') ? 'ready' : state;
+        _password = _state == 'ready' ? state.substring(6) : '';
+      });
     } catch (_) {
-      if (mounted) setState(() => _ready = null);
+      if (mounted) setState(() { _state = 'unavailable'; _password = ''; });
+    } finally {
+      _busy = false;
     }
   }
 
-  Future<void> _generate() async {
+  Future<void> _change() async {
     if (_busy || !bind.isIncomingOnly()) return;
-    setState(() => _busy = true);
+    _busy = true;
     try {
-      final random = Random.secure();
-      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-      final password = List.generate(6, (_) => alphabet[random.nextInt(alphabet.length)]).join();
-      if (!mounted) return;
-      final confirm = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: Text(_ready == true ? '重新生成连接密码' : '设置连接密码'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('固定密码仅在此处显示，请先保存。确认后旧密码失效。'),
-            SelectableText(password, style: Theme.of(context).textTheme.headlineSmall),
-            TextButton(onPressed: () => Clipboard.setData(ClipboardData(text: password)),
-              child: const Text('复制密码')),
-          ]),
+      final password = _randomPassword();
+      final confirm = await showDialog<bool>(context: context, builder: (context) =>
+        AlertDialog(title: const Text('更换固定密码？'),
+          content: const Text('确认后旧密码失效，新密码将显示在首页。'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('确认设置')),
-          ],
-        ),
-      );
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('更换')),
+          ]));
       if (confirm != true || !mounted) return;
       final ok = await bind.mainSetPermanentPasswordWithResult(password: password);
       if (!ok) throw StateError('Password update failed');
-      await gFFI.serverModel.setVerificationMethod(kUsePermanentPassword);
-      if (bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword) {
-        throw StateError('Permanent verification mode unavailable');
-      }
-      await _read();
-      if (mounted && _ready != true) throw StateError('Password state unavailable');
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('密码设置未确认，请检查被控服务状态')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('密码更换失败，请检查共享服务状态')));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _busy = false;
+      if (mounted) unawaited(_read());
     }
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(_ready == true ? '固定连接密码已设置' :
-          _ready == false ? '尚未设置固定连接密码' : '密码状态待确认'),
-      TextButton(onPressed: _busy ? null : _generate,
-        child: Text(_ready == true ? '重新生成 6 位密码' : '生成 6 位连接密码')),
-      const SizedBox(height: 8),
-    ],
-  );
+  Widget build(BuildContext context) => _connectionValue(context, '固定密码',
+    _state == 'ready' ? _password : _state == 'legacy' ? '已设置' : '准备中…',
+    copy: _state == 'ready', edit: _state == 'ready' || _state == 'legacy' ? _change : null);
 }
 
 class _DesktopAutostartSwitch extends StatefulWidget {
