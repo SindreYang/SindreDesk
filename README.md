@@ -213,3 +213,7 @@ Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显�
 发布前先运行 `python -m unittest discover -s tests -v`。Release 客户端工作流首先检查签名配置和引擎哈希格式，再启动耗时构建，以避免配置缺失导致六个平台重复编译。
 
 0.x 开发版本允许暂缺 Windows Engine 哈希，仅供测试；建议仍勾选 Pre-release。已有但无效或不完整的配置继续拒绝构建。旧 Tag 不会自动包含新代码。
+
+### 电脑被控端开机自启
+
+Windows x64 和 Linux x64 Host 首页提供「开机自启」开关，默认关闭。Windows 写入当前用户 Startup 文件夹的快捷方式；Linux 写入当前用户 XDG Autostart 目录。关闭开关删除对应启动项。移动软件目录后请重新关闭并开启开关以更新路径。该功能在用户登录桌面后启动程序，不是登录前系统服务，不保证锁屏/UAC 或无桌面环境可控制。Android、Client 和 Server 不受此功能影响。

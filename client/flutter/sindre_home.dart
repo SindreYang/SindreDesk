@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'desktop_autostart.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -210,6 +212,7 @@ class _SindreHomeState extends State<SindreHome> {
           _value('连接密码', model.serverPasswd.text,
             refresh: () => bind.mainUpdateTemporaryPassword()),
           const Text('远程会话可在连接管理窗口中断开。'),
+          if (DesktopAutostart.supported) const _DesktopAutostartSwitch(),
         ],
       ),
     );
@@ -430,3 +433,63 @@ class _ServerSettingsState extends State<_ServerSettings> {
   );
 }
 
+
+class _DesktopAutostartSwitch extends StatefulWidget {
+  const _DesktopAutostartSwitch();
+
+  @override
+  State<_DesktopAutostartSwitch> createState() => _DesktopAutostartSwitchState();
+}
+
+class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
+  bool? _enabled;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_read());
+  }
+
+  Future<void> _read() async {
+    try {
+      final enabled = await DesktopAutostart.enabled();
+      if (mounted) setState(() => _enabled = enabled);
+    } catch (_) {
+      if (mounted) setState(() => _error = '无法读取开机自启设置');
+    }
+  }
+
+  Future<void> _change(bool value) async {
+    if (_busy || !bind.isIncomingOnly()) return;
+    setState(() { _busy = true; _error = null; });
+    try {
+      await DesktopAutostart.setEnabled(value);
+      final actual = await DesktopAutostart.enabled();
+      if (actual != value) throw StateError('Startup setting mismatch');
+      if (mounted) setState(() => _enabled = actual);
+    } catch (_) {
+      await _read();
+      if (mounted) setState(() => _error = '设置失败，请检查当前用户权限');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('开机自启'),
+        subtitle: const Text('登录当前系统用户后启动被控端'),
+        value: _enabled ?? false,
+        onChanged: _busy || _enabled == null ? null : _change,
+      ),
+      if (_error != null)
+        Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+    ],
+  );
+}

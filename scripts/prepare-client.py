@@ -195,7 +195,8 @@ def prepare(source, role):
     patch_desktop_branding(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
-    shutil.copy2(ROOT / "client/flutter/sindre_home.dart", dest / "sindre_home.dart")
+    for path in (ROOT / "client/flutter").glob("*.dart"):
+        shutil.copy2(path, dest / path.name)
 
 
 def main():
