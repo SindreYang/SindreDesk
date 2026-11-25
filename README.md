@@ -197,8 +197,6 @@ bash scripts/test-server-integration.sh
 上游 [RustDesk](https://github.com/rustdesk/rustdesk) 与 [RustDesk Server](https://github.com/rustdesk/rustdesk-server) 使用 AGPL-3.0。分发二进制须同时满足对应源码、构建脚本、版权及许可证声明义务。
 
 ### 服务器连接状态
-Host 首页始终显示本机连接码和原生密码状态，不以服务器配置或注册状态作为显示前提。Android 未启动共享时仍显示本机信息和启动共享入口；密码由原生服务提供，未生成时显示占位符。服务器状态单独显示。当前连接码仍需要私服协商，无服务器的安全局域网 IP 直连尚未开放。
-
 
 两端首页底部显示服务器状态。Host 使用 RustDesk 原生注册状态，Client 使用 TCP 可达性检测；两者均不代表远程会话已认证或中继可用。Android Host 提供当前会话断开和停止共享；桌面 Host 保留原生会话管理窗口。修改服务器配置失败时尝试恢复原配置，恢复失败会明确提示。
 
