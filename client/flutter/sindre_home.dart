@@ -683,7 +683,7 @@ class _ServerSettingsState extends State<_ServerSettings> {
     )),
     actions: [
       Row(children: [
-        Expanded(child: Text('基于SindreDesk研发',
+        Expanded(child: Text('基于SindreDesk研发--开源且免费',
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(

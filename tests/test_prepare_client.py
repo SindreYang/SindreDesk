@@ -286,11 +286,11 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("title: host ? '被控端' : '控制端'", source)
         self.assertIn("windowManager.setTitle(host ? '被控端' : '控制端')", source)
         self.assertIn("Text(host ? '客户端（被控端）' : '控制端'", ui)
-        self.assertIn("Expanded(child: Text('基于SindreDesk研发'", ui)
+        self.assertIn("Expanded(child: Text('基于SindreDesk研发--开源且免费'", ui)
         self.assertIn("fontSize: 10", ui)
         for name, label in (("host-home.svg", "被控端"),
                             ("client-home.svg", "控制端"),
-                            ("host-settings.svg", "基于SindreDesk研发")):
+                            ("host-settings.svg", "基于SindreDesk研发--开源且免费")):
             self.assertIn(label, (ROOT / "docs/images" / name).read_text(encoding="utf-8"))
 
     def test_workflow_release_only(self):
