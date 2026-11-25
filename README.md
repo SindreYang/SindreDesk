@@ -187,7 +187,7 @@ bash scripts/test-server-integration.sh
 - [x] Linux 服务端真实进程、端口监听、密钥持久化、重复实例拦截及退出测试。
 - [x] Windows/Linux 两种角色编译（上一轮）。
 - [ ] Android 两种角色修复后 APK 编译及真机安装。
-- [ ] 九种跨平台控制组合、错误密码/公钥拒绝、局域网及跨网络 P2P/中继。
+- [ ] 九种跨平台控制组合、错误密码/公钥拒绝、无服务器局域网直连（含错误指纹拒绝）、局域网及跨网络 P2P/中继。
 - [ ] Android 权限、旋转、后台、重连及高通/联发科实机验证。
 - [ ] Windows 锁屏/UAC、Linux Wayland、正式签名及发布附件。
 
@@ -221,11 +221,11 @@ Client 不注册为被控设备。数字连接码模式使用 TCP 21116 探测�
 
 电脑 Host 采用原生永久密码认证。首次使用点击「生成 6 位连接密码」，保存弹窗中的随机密码后确认；不额外存储明文，重启后无需重新生成。忘记密码可在本机重新生成，旧密码失效。Android 仍使用原有密码流程。
 
-Windows：先配置私服、生成固定密码，再开启系统级自启。便携版会进入原生安装界面，Host 默认使用系统注册表指定的 Program Files 下的 SindreDeskHost 正式安装目录；管理员授权后由原生安装器导入配置并注册 Windows Service。安装完成后重新打开已安装 Host 检查状态。不要从可被普通用户修改的目录注册系统服务。
+Windows：生成固定密码即可开启系统级自启；无服务器局域网直连不要求配置私服，只有数字连接码/跨网络使用时才需要私服。便携版会进入原生安装界面，Host 默认使用系统注册表指定的 Program Files 下的 SindreDeskHost 正式安装目录；管理员授权后由原生安装器导入配置并注册 Windows Service。安装完成后重新打开已安装 Host 检查状态。不要从可被普通用户修改的目录注册系统服务。
 
-Linux（systemd 桌面环境）：管理员从可信 Release 解压完整 Host 运行目录，然后将完整目录安装至 /usr/lib/sindredesk-host，并保证目录及文件 root 所有且普通用户不可写；将 Host 发布包中 sindredesk-host.service 安装至 /etc/systemd/system/，执行 sudo systemctl daemon-reload。以普通用户启动 /usr/lib/sindredesk-host/sindredesk-host，配置私服并设置密码，再开启系统级自启。不要以 root 启动 GUI。原生服务同步配置后启用系统服务。关闭开关使用原生停止/卸载服务入口。
+Linux（systemd 桌面环境）：管理员从可信 Release 解压完整 Host 运行目录，然后将完整目录安装至 /usr/lib/sindredesk-host，并保证目录及文件 root 所有且普通用户不可写；将 Host 发布包中 sindredesk-host.service 安装至 /etc/systemd/system/，执行 sudo systemctl daemon-reload。以普通用户启动 /usr/lib/sindredesk-host/sindredesk-host，设置固定密码即可开启系统级自启；局域网直连不要求私服，数字连接码/跨网络使用时再配置私服。不要以 root 启动 GUI。原生服务同步配置后启用系统服务。关闭开关使用原生停止/卸载服务入口。
 
-注意：为匹配实际进程和服务名称，桌面 Host 的原生应用标识调整为 Windows SindreDeskHost、Linux sindredesk-host。升级时尝试迁移当前系统账户的两份旧 Host 配置；保留旧文件，不覆盖已存在的新配置。迁移失败时保留原配置路径供读取。升级前建议备份，升级后核对连接码及私服配置；实际迁移仍需真机验证。新版本重启后的 ID、密码和配置保持情况需要真实设备验证。Linux X11、Wayland 和登录管理器的登录前控制能力存在差异。六位密码应仅在可信私服和受限网络内使用。
+注意：为匹配实际进程和服务名称，桌面 Host 的原生应用标识调整为 Windows SindreDeskHost、Linux sindredesk-host。升级时尝试迁移当前系统账户的两份旧 Host 配置；保留旧文件，不覆盖已存在的新配置。迁移失败时保留原配置路径供读取。升级前建议备份，升级后核对连接码及私服配置；实际迁移仍需真机验证。新版本重启后的 ID、密码和配置保持情况需要真实设备验证。Linux X11、Wayland 和登录管理器的登录前控制能力存在差异。六位密码应仅在可信网络内使用；无服务器直连仍要求核对设备指纹，并通过加密通道完成密码认证。
 
 ### 桌面首页
 
