@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = "https://github.com/rustdesk/rustdesk.git"
 REVISION = "6c578292e8ebbbec708b76986ba8c4bc7c509747"
+LAN_DIRECT_PORT = 32118
+LAN_DISCOVERY_PORT = 32119
 
 
 def git(path, *args):
@@ -75,6 +77,8 @@ def patch_config(text, role):
     }''')
     text = replace_regex(text, r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;',
                          'pub const RENDEZVOUS_SERVERS: &[&str] = &["127.0.0.1:0"];')
+    text = replace_once(text, 'pub const RELAY_PORT: i32 = 21117;',
+        f'pub const RELAY_PORT: i32 = 21117;\npub const SINDRE_LAN_DIRECT_PORT: u16 = {LAN_DIRECT_PORT};\npub const SINDRE_LAN_DISCOVERY_PORT: u16 = {LAN_DISCOVERY_PORT};')
     text = replace_once(text, "pub struct DiscoveryPeer {",
         'pub struct DiscoveryPeer {\n    #[serde(default, deserialize_with = "deserialize_string")]\n    pub fingerprint: String,')
     return text
@@ -254,7 +258,7 @@ def patch_client(text):
         if hbb_common::is_ip_str(peer) || peer.parse::<SocketAddr>().is_ok() {
             // Keep the destination as a resolved SocketAddr: the socket API
             // accepts this type directly and SocketAddr::port() returns u16.
-            const LAN_DIRECT_PORT: u16 = (RELAY_PORT + 1) as u16;
+            const LAN_DIRECT_PORT: u16 = config::SINDRE_LAN_DIRECT_PORT;
             let address: SocketAddr = if let Ok(ip) = peer.parse::<std::net::Ipv4Addr>() {
                 SocketAddr::new(IpAddr::V4(ip), LAN_DIRECT_PORT)
             } else {
@@ -270,13 +274,33 @@ def patch_client(text):
             if expected_fingerprint.len() != 64
                 || !expected_fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
             {
+                crate::sindre_diag::record("lan-fingerprint-required", Some(address), None);
                 bail!("Enter the 64-character device fingerprint shown on the Host");
             }
-            let mut conn = connect_tcp_local(address, None, CONNECT_TIMEOUT).await?;
+            crate::sindre_diag::record("lan-connect-start", Some(address), None);
+            let mut conn = connect_tcp_local(address, None, CONNECT_TIMEOUT).await
+                .map_err(|err| {
+                    crate::sindre_diag::record("lan-tcp-failed", Some(address), None);
+                    err
+                })?;
+            crate::sindre_diag::record("lan-tcp-connected", Some(address), None);
             let bytes = timeout(READ_TIMEOUT, conn.next())
-                .await?
-                .ok_or_else(|| anyhow!("LAN host closed before identity exchange"))??;
-            let identity = Message::parse_from_bytes(&bytes)?;
+                .await.map_err(|err| {
+                    crate::sindre_diag::record("lan-identity-timeout", Some(address), None);
+                    err
+                })?
+                .ok_or_else(|| {
+                    crate::sindre_diag::record("lan-identity-peer-closed", Some(address), None);
+                    anyhow!("LAN host closed before identity exchange")
+                })?
+                .map_err(|err| {
+                    crate::sindre_diag::record("lan-identity-read-failed", Some(address), None);
+                    err
+                })?;
+            let identity = Message::parse_from_bytes(&bytes).map_err(|err| {
+                crate::sindre_diag::record("lan-invalid-protobuf", Some(address), None);
+                err
+            })?;
             let host_sign_pk = match identity.union {
                 Some(message::Union::PublicKey(pk))
                     if pk.symmetric_value.is_empty()
@@ -289,19 +313,29 @@ def patch_client(text):
                             .map_err(|_| anyhow!("Invalid LAN host signing key"))?,
                     )
                 }
-                _ => bail!("Invalid LAN host identity response"),
+                _ => {
+                    crate::sindre_diag::record("lan-invalid-host-identity", Some(address), None);
+                    bail!("目标不是兼容的 SindreDesk Host，请检查被控端版本和局域网端口");
+                }
             };
             let actual_fingerprint = Sha256::digest(&host_sign_pk.0)
                 .iter()
                 .map(|byte| format!("{:02x}", byte))
                 .collect::<String>();
             if !actual_fingerprint.eq_ignore_ascii_case(&expected_fingerprint) {
+                crate::sindre_diag::record("lan-fingerprint-mismatch", Some(address), None);
                 bail!("LAN device fingerprint mismatch; compare it with the Host screen");
             }
-            Self::secure_connection(peer, Vec::new(), "", &mut conn, Some(host_sign_pk)).await?;
+            crate::sindre_diag::record("lan-fingerprint-verified", Some(address), None);
+            Self::secure_connection(peer, Vec::new(), "", &mut conn, Some(host_sign_pk)).await
+                .map_err(|err| {
+                    crate::sindre_diag::record("lan-encryption-failed", Some(address), None);
+                    err
+                })?;
             if !conn.is_secured() {
                 bail!("LAN connection did not establish encryption");
             }
+            crate::sindre_diag::record("lan-encryption-ready", Some(address), None);
             return Ok(((conn, true, None, None, "TCP"), (0, "".to_owned()), false));
         }
         if Config::get_option("custom-rendezvous-server").trim().is_empty()
@@ -378,7 +412,7 @@ def patch_rendezvous_mediator(text):
         Config::set_option("sindre-lan-fingerprint".to_owned(), fingerprint);
         Config::set_option("enable-lan-discovery".to_owned(), "Y".to_owned());
         Config::set_option(OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned());
-        Config::set_option("direct-access-port".to_owned(), (RENDEZVOUS_PORT + 2).to_string());''')
+        Config::set_option("direct-access-port".to_owned(), hbb_common::config::SINDRE_LAN_DIRECT_PORT.to_string());''')
     text = replace_once(text,
         '''        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let start_lan_listening = crate::platform::is_installed();''',
@@ -420,6 +454,7 @@ def patch_rendezvous_mediator(text):
                     });
                     allow_err!(async {
                         // Send the host signing key first so the client can verify its fingerprint.
+                        crate::sindre_diag::record("lan-host-identity-send", Some(addr), None);
                         stream.send(&identity).await?;
                         crate::server::create_tcp_connection(
                             server,
@@ -432,6 +467,82 @@ def patch_rendezvous_mediator(text):
                     }.await);
                 });''')
     return text
+
+
+def patch_lan_status(text):
+    text = replace_regex(text, r'^fn get_direct_port\(\) -> i32 \{\n.*?^\}',
+        '''static SINDRE_LAN_STATUS: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
+pub(crate) fn sindre_lan_status() -> String {
+    match SINDRE_LAN_STATUS.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => "ready",
+        2 => "bind-error",
+        _ => "stopped",
+    }.to_owned()
+}
+
+fn get_direct_port() -> i32 {
+    i32::from(hbb_common::config::SINDRE_LAN_DIRECT_PORT)
+}''')
+    text = replace_once(text,
+        '        if !disabled && listener.is_none() {',
+        '''        if disabled {
+            SINDRE_LAN_STATUS.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        if !disabled && listener.is_none() {''')
+    text = replace_once(text, '                    listener = Some(l);',
+        '''                    listener = Some(l);
+                    SINDRE_LAN_STATUS.store(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::sindre_diag::record("lan-tcp-listening", None, Some(port));''')
+    text = replace_once(text,
+        '''                    loop {
+                        if port != get_direct_port() {
+                            break;
+                        }
+                        sleep(1.).await;
+                    }''',
+        '''                    SINDRE_LAN_STATUS.store(2, std::sync::atomic::Ordering::Relaxed);
+                    crate::sindre_diag::record("lan-tcp-bind-failed", None, Some(port));
+                    sleep(3.).await;''')
+    text = replace_once(text, '                listener = None;\n                continue;',
+        '                listener = None;\n                SINDRE_LAN_STATUS.store(0, std::sync::atomic::Ordering::Relaxed);\n                continue;')
+    return replace_once(text, '                allow_err!(super::lan::start_listening());',
+        '''                loop {
+                    allow_err!(super::lan::start_listening());
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }''')
+
+
+def patch_lan_ports(text):
+    text = replace_once(text, 'config::{self, RENDEZVOUS_PORT},',
+        'config::{self, SINDRE_LAN_DISCOVERY_PORT},')
+    text = replace_once(text, '(RENDEZVOUS_PORT + 3) as _', 'SINDRE_LAN_DISCOVERY_PORT')
+    return replace_once(text, '    let socket = std::net::UdpSocket::bind(addr)?;',
+        '''    let socket = std::net::UdpSocket::bind(addr).map_err(|err| {
+        crate::sindre_diag::record("lan-udp-bind-failed", Some(addr), None);
+        err
+    })?;
+    crate::sindre_diag::record("lan-udp-listening", Some(addr), None);''')
+
+
+def patch_lan_status_ipc(text):
+    return replace_once(text, '                } else if name == "fingerprint" {',
+        '''                } else if name == "sindre-lan-status" {
+                    value = Some(crate::rendezvous_mediator::sindre_lan_status());
+                } else if name == "fingerprint" {''')
+
+
+def patch_lan_status_ffi(text):
+    return replace_once(text, 'pub fn main_get_common(key: String) -> String {',
+        '''pub fn main_get_common(key: String) -> String {
+    if key == "sindre-lan-status" && config::is_incoming_only() {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        return crate::rendezvous_mediator::sindre_lan_status();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        return crate::ipc::get_config("sindre-lan-status")
+            .ok().flatten().unwrap_or_else(|| "unavailable".to_owned());
+    }''')
 
 
 def patch_lan(text):
@@ -683,6 +794,77 @@ def patch_android_native(text):
         '        if config::is_outgoing_only() { return; }\n        log::debug!("startService from jvm");')
 
 
+def patch_windows_portable(source, role):
+    # Use the upstream embedded payload, but keep every role/build in a separate cache.
+    launcher = source / "libs/portable/src/main.rs"
+    app = "SindreDesk" + role.title()
+    text = launcher.read_text(encoding="utf-8")
+    text = replace_once(text, 'const APP_PREFIX: &str = "rustdesk";',
+        f'const APP_PREFIX: &str = "{app}-portable";')
+    text = replace_once(text, '            dir.join(APP_PREFIX)',
+        '''            dir.join(APP_PREFIX).join(format!("{:x}", md5::compute(include_bytes!("../data.bin"))))''')
+    # Never delete or overwrite a different running build's directory.
+    text = replace_once(text, '        std::fs::remove_dir_all(&dir).ok();',
+        '        // Different builds have different payload directories.')
+    text = replace_once(text, '            ui::setup();', '            // Do not show the upstream RustDesk-branded splash.')
+    text = replace_once(text, '        file.write_to_file(&dir);',
+        '        if file.write_to_file(&dir).is_err() { portable_diagnostic("extract-failed"); return None; }')
+    text = replace_once(text, 'fn main() {',
+        f'''fn portable_diagnostic(event: &str) {{
+    use std::io::Write;
+    if let Ok(exe) = std::env::current_exe() {{
+        if let Some(parent) = exe.parent() {{
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true)
+                .open(parent.join("{app}.log")) {{
+                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_secs();
+                let _ = writeln!(file, "{{}} pid={{}} event={{}}", time, std::process::id(), event);
+            }}
+        }}
+    }}
+}}
+
+fn main() {{
+    portable_diagnostic("portable-start");''')
+    text = replace_once(text, '    let _child = cmd.spawn();',
+        '    let _child = cmd.spawn();\n    if _child.is_err() { portable_diagnostic("launch-failed"); std::process::exit(1); }')
+    text = replace_once(text, '        execute(exe, args, ui);\n    }',
+        '''        portable_diagnostic("extract-verified");
+        if args == vec!["--sindre-verify-package".to_owned()] {
+            std::process::exit(0);
+        }
+        execute(exe, args, ui);
+    } else {
+        portable_diagnostic("setup-failed");
+        std::process::exit(1);
+    }''')
+    text = replace_once(text, '    let mut cmd = Command::new(path);',
+        '''    let mut cmd = Command::new(&path);
+    if let Some(parent) = path.parent() { cmd.current_dir(parent); }
+    if let Some(parent) = exe.parent() { cmd.env("SINDRE_LOG_DIR", parent); }''')
+    # The runtime broker name is shared with upstream; do not kill unrelated RustDesk processes.
+    text = replace_regex(text, r'        let _allow_err = Command::new\("taskkill"\)\n.*?            \.output\(\);',
+        '        // Never terminate the original RustDesk broker.')
+    launcher.write_text(text, encoding="utf-8")
+    reader = source / "libs/portable/src/bin_reader.rs"
+    text = reader.read_text(encoding="utf-8")
+    text = replace_once(text, '    pub fn write_to_file(&self, prefix: &Path) {',
+        '    pub fn write_to_file(&self, prefix: &Path) -> std::io::Result<()> {')
+    text = replace_once(text, '                let _ = fs::create_dir_all(parent);', '                fs::create_dir_all(parent)?;')
+    text = replace_once(text, '                return;\n            } else {', '                return Ok(());\n            } else {')
+    text = replace_once(text, '        let _ = fs::write(p, self.decompress());',
+        '''        let data = self.decompress();
+        if format!("{:x}", md5::compute(&data)).as_bytes() != self.md5_code {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Portable payload checksum mismatch"));
+        }
+        fs::write(p, data)''')
+    reader.write_text(text, encoding="utf-8")
+    manifest = source / "libs/portable/Cargo.toml"
+    patch(manifest, lambda s: s.replace('ProductName = "RustDesk"', f'ProductName = "{app}"')
+        .replace('OriginalFilename = "rustdesk.exe"', f'OriginalFilename = "{app}.exe"')
+        .replace('FileDescription = "RustDesk Remote Desktop"', f'FileDescription = "{app}"'))
+
+
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
@@ -735,7 +917,21 @@ def prepare(source, role):
     }
     Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;'''))
     patch(source / "src/rendezvous_mediator.rs", patch_rendezvous_mediator)
+    patch(source / "src/rendezvous_mediator.rs", patch_lan_status)
     patch(source / "src/lan.rs", patch_lan)
+    patch(source / "src/lan.rs", patch_lan_ports)
+    if role == "host":
+        patch(source / "src/ipc.rs", patch_lan_status_ipc)
+        patch(source / "src/flutter_ffi.rs", patch_lan_status_ffi)
+    shutil.copy2(ROOT / "client/native/sindre_diag.rs", source / "src/sindre_diag.rs")
+    patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;'))
+    patch(source / "src/core_main.rs", lambda s: replace_once(s, '    hbb_common::init_log(false, &log_name);',
+        '    hbb_common::init_log(false, &log_name);\n    crate::sindre_diag::record("desktop-start", None, None);'))
+    patch(source / "src/server/connection.rs", lambda s: replace_once(
+        replace_once(s, '        self.authorized = true;',
+            '        self.authorized = true;\n        crate::sindre_diag::record("session-authorized", None, None);'),
+        '    async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {',
+        '    async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {\n        crate::sindre_diag::record("session-login-rejected", None, None);'))
     patch(source / "src/ui_interface.rs", patch_ui_interface)
     patch(source / "flutter/lib/models/peer_model.dart", patch_peer_model)
     patch(source / "flutter/lib/main.dart", patch_main)
@@ -748,6 +944,7 @@ def prepare(source, role):
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
     patch_desktop_branding(source, role)
     patch_desktop_icons(source, role)
+    patch_windows_portable(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
     for path in (ROOT / "client/flutter").glob("*.dart"):

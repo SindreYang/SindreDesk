@@ -14,15 +14,15 @@
 
 | 平台 | 被控端 Host | 控制端 Client |
 | --- | --- | --- |
-| Windows 10/11 x64 | SindreDeskHost-windows-x64.zip | SindreDeskClient-windows-x64.zip |
+| Windows 10/11 x64 | SindreDeskHost.exe | SindreDeskClient.exe |
 | Linux x64 | SindreDeskHost-linux-x64.tar.gz | SindreDeskClient-linux-x64.tar.gz |
 | Android ARM64 | SindreDeskHost.apk | SindreDeskClient.apk |
 
-- Windows：解压整个 ZIP，双击相应的 EXE；不要只复制 EXE。
+- Windows：下载对应的单个 EXE，双击运行，无需手动解压。首次运行会自动准备运行文件。
 - Linux：解压后运行 `./sindredesk-host` 或 `./sindredesk-client`（必要时先添加执行权限）。
 - Android：安装 APK；文件名带 `-test.apk` 表示测试签名，仅供测试。签名不兼容时可能需要先卸载旧版，请先备份配置。
 
-未提供 macOS、iOS、32 位 Android 或 ARM64 桌面版本。若该版本没有对应附件，可查看 [构建记录](https://github.com/SindreYang/SindreDesk/actions)；没有成功构建的包暂不可下载。Windows 当前提供完整便携目录，不是 MSI 安装器。
+未提供 macOS、iOS、32 位 Android 或 ARM64 桌面版本。若该版本没有对应附件，可查看 [构建记录](https://github.com/SindreYang/SindreDesk/actions)；没有成功构建的包暂不可下载。Windows 为单文件便携版，不是 MSI 安装器。
 
 ## 2. 同一局域网连接（推荐）
 
@@ -82,9 +82,17 @@ chmod +x SindreDeskServer
 | 跨网络连不上 | 确认双方服务器地址和公钥一致、服务器端口可达 |
 | Release 没有安装包 | 查看对应版本构建记录；成功产物才能下载 |
 
-局域网直连仅支持私有 IPv4，使用 TCP 21118（连接）和 UDP 21119（发现）。仅在可信局域网开放，不向公网映射 Host 直连端口。
+局域网直连仅支持私有 IPv4，使用 TCP 32118（连接）和 UDP 32119（发现）。仅在可信局域网开放，不向公网映射 Host 直连端口。
 
-## 7. 其他资料
+## 7. 连接失败时查看日志
+
+Windows 双击 EXE 后，通常会在下载的 EXE 同级目录生成 `SindreDeskHost.log` 或 `SindreDeskClient.log`。如果目录不可写，会退回到程序运行目录或应用日志目录。系统服务可能由不同账户运行，其日志位于安装目录或服务账户的应用日志目录。
+
+连接失败时，将两端日志中对应时间的内容发给维护人员。日志记录便携程序启动、端口监听、连接阶段、身份验证和登录结果，不记录密码、私钥或协议消息正文。日志包含局域网地址，请注意保护隐私。
+
+新版使用独立端口，Host 和 Client 必须一起更新；原版 RustDesk 不必停止。若显示「局域网端口不可用」，请检查是否有其他程序占用 TCP 32118，并重新启动 Host。
+
+## 8. 其他资料
 
 [版本变更](CHANGELOG.md) · [部署指南](docs/deployment.md) · [开发与发布](docs/development.md) · [架构](docs/architecture.md) · [验收记录](docs/acceptance.md)
 

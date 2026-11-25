@@ -35,11 +35,13 @@ bool _isPrivateIPv4(String value) {
       (a == 172 && b >= 16 && b <= 31);
 }
 
+const int _lanDirectPort = 32118;
+
 bool _isPrivateLanAddress(String value) {
   final parts = value.trim().split(':');
   if (parts.length > 2) return false;
-  final port = parts.length == 2 ? int.tryParse(parts[1]) : 21118;
-  return port == 21118 && _isPrivateIPv4(parts.first);
+  final port = parts.length == 2 ? int.tryParse(parts[1]) : _lanDirectPort;
+  return port == _lanDirectPort && _isPrivateIPv4(parts.first);
 }
 
 bool validFingerprint(String value) =>
@@ -115,6 +117,9 @@ class _SindreHomeState extends State<SindreHome> {
   Timer? _lanScanTimer;
   bool _busy = false;
   bool _showPassword = false;
+  String _lanStatus = 'unavailable';
+  bool _checkingLan = false;
+  Timer? _lanStatusTimer;
   String _message = '';
 
   bool get host => bind.isIncomingOnly();
@@ -130,6 +135,8 @@ class _SindreHomeState extends State<SindreHome> {
       gFFI.serverModel.hideCm = false;
       unawaited(gFFI.serverModel.setApproveMode('password'));
       unawaited(gFFI.serverModel.setVerificationMethod(kUsePermanentPassword));
+      unawaited(_readLanStatus());
+      _lanStatusTimer = Timer.periodic(const Duration(seconds: 3), (_) => _readLanStatus());
     }
     if (!host) {
       _scanLan();
@@ -150,7 +157,21 @@ class _SindreHomeState extends State<SindreHome> {
     _id.dispose();
     _password.dispose();
     _lanScanTimer?.cancel();
+    _lanStatusTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _readLanStatus() async {
+    if (!mounted || _checkingLan || !host) return;
+    _checkingLan = true;
+    try {
+      final status = await bind.mainGetCommon(key: 'sindre-lan-status');
+      if (mounted && _lanStatus != status) setState(() => _lanStatus = status);
+    } catch (_) {
+      if (mounted && _lanStatus != 'unavailable') setState(() => _lanStatus = 'unavailable');
+    } finally {
+      _checkingLan = false;
+    }
   }
 
   Future<void> _settings() async {
@@ -388,9 +409,12 @@ class _SindreHomeState extends State<SindreHome> {
             final model = gFFI.serverModel;
             final connected = model.clients.any((client) => !client.disconnected);
             final stopped = isAndroid && !model.isStart;
-            final status = stopped ? '未启动共享' : connected ? '连接中' : '等待连接';
+            final bindError = _lanStatus == 'bind-error';
+            final ready = _lanStatus == 'ready';
+            final status = stopped ? '未启动共享' : connected ? '连接中'
+                : bindError ? '局域网端口不可用' : ready ? '等待连接' : '局域网未就绪';
             return Row(children: [
-              Icon(Icons.circle, size: 8, color: stopped ? colors.outline : Colors.green),
+              Icon(Icons.circle, size: 8, color: bindError ? colors.error : ready && !stopped ? Colors.green : colors.outline),
               const SizedBox(width: 6),
               Flexible(child: Text(status, style: theme.textTheme.bodySmall)),
             ]);

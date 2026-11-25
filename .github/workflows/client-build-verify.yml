@@ -255,6 +255,14 @@ jobs:
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
           test -s "flutter/build/windows/x64/runner/Release/$app.exe"
           test -s flutter/build/windows/x64/runner/Release/librustdesk.dll
+          python -m pip install -r libs/portable/requirements.txt
+          (cd libs/portable && python generate.py -f ../../flutter/build/windows/x64/runner/Release -o . -e "$app.exe" -l 6)
+          test -s target/release/rustdesk-portable-packer.exe
+          mkdir -p "$GITHUB_WORKSPACE/windows-portable"
+          cp target/release/rustdesk-portable-packer.exe "$GITHUB_WORKSPACE/windows-portable/$app.exe"
+          test -s "$GITHUB_WORKSPACE/windows-portable/$app.exe"
+          "$GITHUB_WORKSPACE/windows-portable/$app.exe" --sindre-verify-package
+          test -s "$GITHUB_WORKSPACE/windows-portable/$app.log"
       - name: Configure Android signing
         if: matrix.platform == 'android'
         env:
@@ -320,7 +328,7 @@ jobs:
         if: matrix.platform == 'windows'
         with:
           name: SindreDesk-${{ matrix.role }}-windows-x64-ci
-          path: upstream/${{ matrix.role }}/flutter/build/windows/x64/runner/Release/
+          path: windows-portable/SindreDesk*.exe
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: matrix.platform == 'android'
@@ -353,7 +361,7 @@ jobs:
             case "$role" in host) app=SindreDeskHost;; client) app=SindreDeskClient;; esac
             chmod +x "packages/SindreDesk-$role-linux-x64-ci/sindredesk-$role"
             tar -C "packages/SindreDesk-$role-linux-x64-ci" -czf "release/$app-linux-x64.tar.gz" .
-            (cd "packages/SindreDesk-$role-windows-x64-ci" && zip -qr "../../release/$app-windows-x64.zip" .)
+            cp "packages/SindreDesk-$role-windows-x64-ci/$app.exe" "release/$app.exe"
             android="packages/SindreDesk-$role-android-arm64-ci"
             if [[ -f "$android/$app-TEST-SIGNING.txt" ]]; then
               cp "$android/$app.apk" "release/$app-test.apk"
@@ -362,7 +370,7 @@ jobs:
               cp "$android/$app.apk" release/
             fi
           done
-          (cd release && sha256sum *.apk *.zip *.tar.gz > SHA256SUMS-clients)
+          (cd release && sha256sum *.apk *.exe *.tar.gz > SHA256SUMS-clients)
           if [[ "$RELEASE_TAG" =~ ^v?0\.[0-9]+\.[0-9]+([+-].*)?$ ]]; then
             printf "0.x development build; not production validated.\n" > release/DEVELOPMENT-BUILD.txt
           fi

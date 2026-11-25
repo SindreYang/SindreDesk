@@ -13,8 +13,8 @@
 | --- | --- |
 | SindreDesk-host-android-arm64-ci | SindreDeskHost.apk |
 | SindreDesk-client-android-arm64-ci | SindreDeskClient.apk |
-| SindreDesk-host-windows-x64-ci | Windows Host 完整运行目录 |
-| SindreDesk-client-windows-x64-ci | Windows Client 完整运行目录 |
+| SindreDesk-host-windows-x64-ci | Windows Host 单文件 EXE |
+| SindreDesk-client-windows-x64-ci | Windows Client 单文件 EXE |
 | SindreDesk-host-linux-x64-ci | Linux Host 完整运行目录 |
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
@@ -57,3 +57,9 @@ bash scripts/test-server-integration.sh
 ## 密码显示缓存
 
 仅 Host 的本机配置保存以本机私有签名密钥派生密钥、随机 nonce 的 Secretbox 认证加密保存的可恢复密码，服务认证继续使用原生加盐验证值。每次显示前核对原生验证值，旧密码不可逆时不自动覆盖。本地加密并非系统凭据保险库，无法防御已控制本机并读取私有配置的攻击者；需在可信设备上使用。不得记录密码或明文存储。
+
+## Windows 便携版与诊断
+
+复用上游 portable packer，Host/Client 按独立目录和嵌入载荷摘要隔离。打包前检查原始运行目录，打包后验证 EXE 非空；运行时核对每个解包文件的完整性。该方案不是完全静态链接。系统级安装仍使用原生安装入口，不从便携缓存注册高权限服务。
+
+局域网 TCP 32118、UDP 32119 独立于原版 RustDesk；服务器端口不变。诊断文件按角色记录固定事件、时间、进程号、端口和连接地址，单文件约 5 MiB 轮换。不会写入密码、私钥、指纹或协议正文。
