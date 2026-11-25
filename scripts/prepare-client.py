@@ -128,10 +128,60 @@ def patch_legacy_host_config(text):
         path''')
 
 
+def patch_host_password_policy(text):
+    text = replace_once(text, 'fn verification_method() -> VerificationMethod {',
+        '''fn verification_method() -> VerificationMethod {
+    if crate::config::is_incoming_only() {
+        return VerificationMethod::OnlyUsePermanentPassword;
+    }''')
+    text = replace_once(text, 'pub fn approve_mode() -> ApproveMode {',
+        '''pub fn approve_mode() -> ApproveMode {
+    if crate::config::is_incoming_only() {
+        return ApproveMode::Password;
+    }''')
+    return replace_once(text, 'pub fn hide_cm() -> bool {',
+        '''pub fn hide_cm() -> bool {
+    if crate::config::is_incoming_only() {
+        return false;
+    }''')
+
+
 def patch_fixed_password(text):
     text = replace_once(text,
         'pub fn main_set_permanent_password_with_result(password: String) -> bool {\n    ui_interface::set_permanent_password_with_result(password)\n}',
-        '''fn sindre_password_state() -> String {
+        '''fn sindre_cache_key() -> Option<hbb_common::sodiumoxide::crypto::secretbox::Key> {
+    use hbb_common::{sha2::{Digest, Sha256}, sodiumoxide::crypto::secretbox};
+    // Use private signing material, not the advertised public key or machine ID.
+    let (secret, _) = config::Config::get_key_pair();
+    if secret.len() != hbb_common::sodiumoxide::crypto::sign::SECRETKEYBYTES {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"sindredesk-local-password-cache-v1");
+    hasher.update(&secret);
+    secretbox::Key::from_slice(&hasher.finalize())
+}
+
+fn sindre_encrypt_password(password: &str) -> Option<Vec<u8>> {
+    use hbb_common::sodiumoxide::crypto::secretbox;
+    let key = sindre_cache_key()?;
+    let nonce = secretbox::gen_nonce();
+    let mut cipher = nonce.0.to_vec();
+    cipher.extend(secretbox::seal(password.as_bytes(), &nonce, &key));
+    Some(cipher)
+}
+
+fn sindre_decrypt_password(cipher: &[u8]) -> Option<Vec<u8>> {
+    use hbb_common::sodiumoxide::crypto::secretbox;
+    if cipher.len() < secretbox::NONCEBYTES + secretbox::MACBYTES {
+        return None;
+    }
+    let key = sindre_cache_key()?;
+    let nonce = secretbox::Nonce::from_slice(&cipher[..secretbox::NONCEBYTES])?;
+    secretbox::open(&cipher[secretbox::NONCEBYTES..], &nonce, &key).ok()
+}
+
+fn sindre_password_state() -> String {
     if !config::is_incoming_only() {
         return "unavailable".to_owned();
     }
@@ -155,7 +205,7 @@ def patch_fixed_password(text):
     let Ok(cipher) = hbb_common::base64::decode(cached, hbb_common::base64::Variant::Original) else {
         return "legacy".to_owned();
     };
-    let Ok(plain) = hbb_common::password_security::symmetric_crypt(&cipher, false) else {
+    let Some(plain) = sindre_decrypt_password(&cipher) else {
         return "legacy".to_owned();
     };
     let Ok(password) = String::from_utf8(plain) else {
@@ -175,7 +225,7 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     }
     // Only the local GUI cache is reversible; native authentication keeps its salted hash.
     // Encryption failure must not silently fall back to plaintext.
-    let Ok(cipher) = hbb_common::password_security::symmetric_crypt(password.as_bytes(), true) else {
+    let Some(cipher) = sindre_encrypt_password(&password) else {
         return false;
     };
     let encoded = hbb_common::base64::encode(cipher, hbb_common::base64::Variant::Original);
@@ -205,10 +255,7 @@ def patch_client(text):
             // Keep the destination as a resolved SocketAddr: the socket API
             // accepts this type directly and SocketAddr::port() returns u16.
             const LAN_DIRECT_PORT: u16 = (RELAY_PORT + 1) as u16;
-            let address: SocketAddr = if hbb_common::is_ip_str(peer) {
-                let ip: std::net::Ipv4Addr = peer
-                    .parse()
-                    .map_err(|_| anyhow!("LAN direct access requires IPv4"))?;
+            let address: SocketAddr = if let Ok(ip) = peer.parse::<std::net::Ipv4Addr>() {
                 SocketAddr::new(IpAddr::V4(ip), LAN_DIRECT_PORT)
             } else {
                 peer.parse()
@@ -341,7 +388,11 @@ def patch_rendezvous_mediator(text):
         '''            if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
                 stream.set_nodelay(true).ok();''',
         '''            if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
-                if !matches!(addr.ip(), IpAddr::V4(ip) if ip.is_private()) {
+                let private = match addr.ip() {
+                    IpAddr::V4(ip) => ip.is_private(),
+                    IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(false, |v4| v4.is_private()),
+                };
+                if !private {
                     log::warn!("Reject non-private direct connection from {}", addr);
                     continue;
                 }
@@ -662,6 +713,7 @@ def prepare(source, role):
 
     patch(source / "src/flutter_ffi.rs", patch_android_native)
     if role == "host":
+        patch(source / "libs/hbb_common/src/password_security.rs", patch_host_password_policy)
         patch(source / "src/flutter_ffi.rs", patch_fixed_password)
         patch(source / "src/flutter_ffi.rs", lambda s: replace_once(s,
             'pub fn main_get_common(key: String) -> String {',

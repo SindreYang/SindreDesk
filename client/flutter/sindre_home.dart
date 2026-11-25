@@ -181,7 +181,7 @@ class _SindreHomeState extends State<SindreHome> {
           value: saved.toLowerCase());
       return true;
     }
-    final controller = TextEditingController();
+    String entered = '';
     final accepted = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -190,7 +190,7 @@ class _SindreHomeState extends State<SindreHome> {
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           Text('在被控端点击右下角 IP，复制完整设备指纹并粘贴到这里。'),
           const SizedBox(height: 12),
-          TextField(controller: controller, autocorrect: false,
+          TextField(onChanged: (value) => entered = value, autocorrect: false,
             enableSuggestions: false, maxLines: 3,
             decoration: const InputDecoration(labelText: '设备指纹',
               border: OutlineInputBorder())),
@@ -203,7 +203,7 @@ class _SindreHomeState extends State<SindreHome> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
           FilledButton(onPressed: () {
-            final value = controller.text.replaceAll(RegExp(r'[:\s]'), '').toLowerCase();
+            final value = entered.replaceAll(RegExp(r'[:\s]'), '').toLowerCase();
             if (validFingerprint(value) &&
                 (advertised.isEmpty || value == advertised.toLowerCase())) {
               Navigator.pop(context, value);
@@ -215,10 +215,8 @@ class _SindreHomeState extends State<SindreHome> {
         ],
       ),
     );
-    controller.dispose();
     if (accepted == null || !mounted) return false;
     await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip', value: accepted);
-    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$address', value: accepted);
     return true;
   }
 
@@ -228,6 +226,8 @@ class _SindreHomeState extends State<SindreHome> {
     try {
       if (!await _confirmIdentity(peer.ip, advertised: peer.fingerprint) || !mounted) return;
       setState(() { _id.text = peer.ip; _message = ''; });
+    } catch (_) {
+      if (mounted) setState(() => _message = '无法保存设备身份，请重试');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

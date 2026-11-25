@@ -111,8 +111,12 @@ class PrepareClientTests(unittest.TestCase):
                   '    ui_interface::set_permanent_password_with_result(password)\n}\n'
                   'pub fn main_get_common(key: String) -> String {\n}')
         result = module.patch_fixed_password(source)
-        self.assertIn('symmetric_crypt(password.as_bytes(), true)', result)
-        self.assertIn('symmetric_crypt(&cipher, false)', result)
+        self.assertIn('sindre_encrypt_password(&password)', result)
+        self.assertIn('sindre_decrypt_password(&cipher)', result)
+        self.assertIn('secretbox::gen_nonce()', result)
+        self.assertIn('secretbox::seal', result)
+        self.assertIn('secretbox::open', result)
+        self.assertIn('let (secret, _) = config::Config::get_key_pair()', result)
         self.assertIn('decode_permanent_password_h1_from_storage', result)
         self.assertIn('Ok(Some(value)) if value == "N"', result)
         self.assertIn('return "unavailable".to_owned()', result)
@@ -120,6 +124,15 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("state == 'missing'", ui)
         self.assertIn("sindre-fixed-password", ui)
         self.assertIn("state.startsWith('ready:')", ui)
+
+    def test_host_password_policy(self):
+        source = ('fn verification_method() -> VerificationMethod {\n}\n'
+                  'pub fn approve_mode() -> ApproveMode {\n}\n'
+                  'pub fn hide_cm() -> bool {\n}')
+        result = module.patch_host_password_policy(source)
+        self.assertIn('return VerificationMethod::OnlyUsePermanentPassword;', result)
+        self.assertIn('return ApproveMode::Password;', result)
+        self.assertIn('return false;', result)
 
     def test_lan_peer_model_patch(self):
         source = '''class Peer {
@@ -161,7 +174,8 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("Some(host_sign_pk)", source)
         self.assertIn("peer.parse::<SocketAddr>().is_ok()", source)
         self.assertIn("const LAN_DIRECT_PORT: u16", source)
-        self.assertIn("let address: SocketAddr = if", source)
+        self.assertIn("let address: SocketAddr = if let Ok(ip) = peer.parse::<std::net::Ipv4Addr>()", source)
+        self.assertIn("ip.to_ipv4_mapped()", source)
         self.assertIn("address.port() == LAN_DIRECT_PORT", source)
         self.assertIn("connect_tcp_local(address, None, CONNECT_TIMEOUT)", source)
         self.assertNotIn("connect_tcp_local(&address, None, CONNECT_TIMEOUT)", source)
