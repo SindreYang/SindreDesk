@@ -44,9 +44,6 @@ bool _isPrivateLanAddress(String value) {
   return port == _lanDirectPort && _isPrivateIPv4(parts.first);
 }
 
-bool validFingerprint(String value) =>
-    RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value.replaceAll(RegExp(r'[:\s]'), ''));
-
 bool validServer(String value) {
   final host = value.trim();
   final parts = host.split('.');
@@ -95,13 +92,6 @@ Widget _surfaceCard(BuildContext context, Widget child) => Container(
 );
 
 String _lanIp(String value) => value.trim().split(':').first;
-
-String _savedFingerprint(String address) {
-  final ip = _lanIp(address);
-  final saved = bind.mainGetOptionSync(key: 'sindre-lan-peer-fingerprint:$ip');
-  return validFingerprint(saved) ? saved : bind.mainGetOptionSync(
-      key: 'sindre-lan-peer-fingerprint:$ip:21118');
-}
 
 class SindreHome extends StatefulWidget {
   const SindreHome({super.key});
@@ -193,81 +183,9 @@ class _SindreHomeState extends State<SindreHome> {
     bind.mainDiscover();
   }
 
-  Future<bool> _confirmIdentity(String address, {String advertised = ''}) async {
-    final ip = _lanIp(address);
-    final saved = _savedFingerprint(ip);
-    if (validFingerprint(saved) &&
-        (advertised.isEmpty || saved.toLowerCase() == advertised.toLowerCase())) {
-      await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip',
-          value: saved.toLowerCase());
-      return true;
-    }
-    String entered = '';
-    final accepted = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('确认设备身份'),
-        scrollable: true,
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('在被控端点击右下角 IP，复制完整设备指纹并粘贴到这里。'),
-          const SizedBox(height: 12),
-          TextField(onChanged: (value) => entered = value, autocorrect: false,
-            enableSuggestions: false, maxLines: 3,
-            decoration: const InputDecoration(labelText: '设备指纹',
-              border: OutlineInputBorder())),
-          if (advertised.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text('发现的设备指纹（必须与被控端一致）'),
-            SelectableText(advertised),
-          ],
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          FilledButton(onPressed: () {
-            final value = entered.replaceAll(RegExp(r'[:\s]'), '').toLowerCase();
-            if (validFingerprint(value) &&
-                (advertised.isEmpty || value == advertised.toLowerCase())) {
-              Navigator.pop(context, value);
-            } else {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(content: Text('指纹无效或不一致，请重新核对')));
-            }
-          }, child: const Text('确认')),
-        ],
-      ),
-    );
-    if (accepted == null || !mounted) return false;
-    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip', value: accepted);
-    return true;
-  }
-
-  Future<void> _selectLanPeer(Peer peer) async {
-    if (_busy || !_isPrivateIPv4(peer.ip) || !validFingerprint(peer.fingerprint)) return;
-    setState(() => _busy = true);
-    try {
-      if (!await _confirmIdentity(peer.ip, advertised: peer.fingerprint) || !mounted) return;
-      setState(() { _id.text = peer.ip; _message = ''; });
-    } catch (_) {
-      if (mounted) setState(() => _message = '无法保存设备身份，请重试');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _forgetIdentity() async {
-    if (_busy || !_isPrivateLanAddress(_id.text)) return;
-    final ip = _lanIp(_id.text);
-    final confirm = await showDialog<bool>(context: context, builder: (context) =>
-      AlertDialog(title: const Text('重新核对设备身份？'),
-        content: const Text('下次连接时需要重新核对被控端设备指纹。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('重新核对')),
-        ]));
-    if (confirm != true || !mounted) return;
-    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip', value: '');
-    await bind.mainSetOption(key: 'sindre-lan-peer-fingerprint:$ip:21118', value: '');
-    if (mounted) setState(() {});
+  void _selectLanPeer(Peer peer) {
+    if (_busy || !_isPrivateIPv4(peer.ip)) return;
+    setState(() { _id.text = peer.ip; _message = ''; });
   }
 
   Future<void> _connect() async {
@@ -289,13 +207,6 @@ class _SindreHomeState extends State<SindreHome> {
     }
     setState(() { _busy = true; _message = ''; });
     try {
-      if (direct) {
-        final ip = _lanIp(id);
-        final matches = gFFI.lanPeersModel.peers.where((peer) =>
-            peer.ip == ip && validFingerprint(peer.fingerprint)).toList();
-        final advertised = matches.isEmpty ? '' : matches.first.fingerprint;
-        if (!await _confirmIdentity(id, advertised: advertised) || !mounted) return;
-      }
       _password.clear();
       await connect(context, direct ? _lanIp(id) : id, password: password);
     } catch (_) {
@@ -317,7 +228,7 @@ class _SindreHomeState extends State<SindreHome> {
         animation: gFFI.lanPeersModel,
         builder: (context, _) {
           final peers = gFFI.lanPeersModel.peers.where((peer) =>
-              _isPrivateIPv4(peer.ip) && validFingerprint(peer.fingerprint)).take(8).toList();
+              _isPrivateIPv4(peer.ip)).take(8).toList();
           if (peers.isEmpty) return Text('暂未发现设备', style: Theme.of(context).textTheme.bodySmall);
           return Column(children: [
             for (final peer in peers)
@@ -364,10 +275,7 @@ class _SindreHomeState extends State<SindreHome> {
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.: ]'))],
           onChanged: _onIdChanged,
           decoration: InputDecoration(hintText: '输入连接码或 IP 地址',
-            isDense: true, border: border,
-            suffixIcon: _isPrivateLanAddress(_id.text) ? IconButton(
-              tooltip: '重新核对设备身份', onPressed: _forgetIdentity,
-              icon: const Icon(Icons.verified_user_outlined, size: 20)) : null)),
+            isDense: true, border: border)),
         const SizedBox(height: 16),
         Text('连接密码', style: Theme.of(context).textTheme.labelLarge),
         const SizedBox(height: 8),
@@ -457,7 +365,6 @@ class _LanConnectionInfo extends StatefulWidget {
 class _LanConnectionInfoState extends State<_LanConnectionInfo> {
   Timer? _timer;
   List<String> _addresses = [];
-  String _fingerprint = '';
 
   @override
   void initState() {
@@ -531,10 +438,8 @@ class _LanConnectionInfoState extends State<_LanConnectionInfo> {
         addresses.remove(preferred);
         addresses.insert(0, preferred);
       }
-      final fingerprint = bind.mainGetOptionSync(key: 'sindre-lan-fingerprint');
-      if (mounted && (addresses.join(',') != _addresses.join(',') ||
-          fingerprint != _fingerprint)) {
-        setState(() { _addresses = addresses; _fingerprint = fingerprint; });
+      if (mounted && addresses.join(',') != _addresses.join(',')) {
+        setState(() => _addresses = addresses);
       }
     } catch (_) {
       // Network enumeration may be temporarily unavailable.
@@ -558,11 +463,6 @@ class _LanConnectionInfoState extends State<_LanConnectionInfo> {
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         for (final address in _addresses) _copyable('局域网 IP', address),
         if (_addresses.isEmpty) const Text('未检测到局域网地址'),
-        const SizedBox(height: 12),
-        if (_fingerprint.isEmpty) const Text('设备指纹将在共享服务启动后显示')
-        else _copyable('设备指纹', _fingerprint),
-        const SizedBox(height: 8),
-        const Text('首次连接请与控制端核对完整指纹。'),
       ]),
       actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))],
     ));
@@ -647,6 +547,27 @@ class _ServerSettingsState extends State<_ServerSettings> {
     super.dispose();
   }
 
+  Future<void> _clearLanTrust() async {
+    if (_busy || widget.host) return;
+    final confirmed = await showDialog<bool>(context: context, builder: (context) =>
+      AlertDialog(title: const Text('清除局域网信任记录？'),
+        content: const Text('仅在确认被控设备更换时使用。下次连接将重新建立信任，请仅在可信网络操作。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('清除')),
+        ]));
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final ok = await bind.mainGetCommon(key: 'sindre-clear-lan-trust');
+      if (mounted) setState(() => _error = ok == 'true' ? '已清除局域网信任记录' : '清除失败');
+    } catch (_) {
+      if (mounted) setState(() => _error = '清除失败');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _save() async {
     if (_busy) return;
     final server = _server.text.trim();
@@ -723,6 +644,11 @@ class _ServerSettingsState extends State<_ServerSettings> {
           decoration: const InputDecoration(labelText: '服务器公钥')),
         if (_error != null) Padding(
           padding: const EdgeInsets.only(top: 12), child: Text(_error!)),
+        if (!widget.host) ...[
+          const Divider(height: 24),
+          TextButton(onPressed: _busy ? null : _clearLanTrust,
+            child: const Text('清除局域网信任记录')),
+        ],
         if (widget.host && DesktopAutostart.supported) ...[
           const Divider(height: 24),
           const _DesktopAutostartSwitch(),
