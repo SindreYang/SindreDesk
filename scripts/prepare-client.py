@@ -44,9 +44,14 @@ def patch_config(text, role):
     ]:
         text = replace_regex(text, rf"^pub fn {function}\(\) -> bool \{{\n.*?^\}}",
                              f"pub fn {function}() -> bool {{\n    {str(value).lower()}\n}}")
-    text = replace_regex(text,
-        r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;',
+    # Desktop Host native service/process names must match actual executable names.
+    app_name = ('''    pub static ref APP_NAME: RwLock<String> = RwLock::new(
+        if cfg!(target_os = "windows") { "SindreDeskHost" }
+        else if cfg!(target_os = "linux") { "sindredesk-host" }
+        else { "SindreDesk Host" }.to_owned());''' if host else
         f'    pub static ref APP_NAME: RwLock<String> = RwLock::new("{name}".to_owned());')
+    text = replace_regex(text,
+        r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;', app_name)
     # 禁止旧配置、EXE 文件名及公共服务器自动回退；空配置仅使用不可用的本地端口。
     text = replace_regex(text,
         r'^    pub fn get_rendezvous_server\(\) -> String \{\n.*?^    \}',
@@ -176,6 +181,22 @@ def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
     patch(source / "src/common.rs", patch_common)
+    if role == "host":
+        # Do not discover or reuse a legacy RustDesk installation.
+        patch(source / "src/platform/windows.rs", lambda s: replace_regex(s,
+            r'^fn get_valid_subkey\(\) -> String \{\n.*?^\}',
+            '''fn get_valid_subkey() -> String {
+    get_subkey(&crate::get_app_name(), false)
+}'''))
+        # Restrict the native Windows installer to its normal protected install path.
+        patch(source / "src/platform/windows.rs", lambda s: replace_once(s,
+            '    let mut path = path.trim_end_matches(\'\\\\\').to_owned();',
+            '    let mut path = String::new();'))
+        # The upstream Linux service copies both native configuration files to root.
+        patch(source / "src/platform/linux.rs", lambda s: replace_once(s,
+            'format!("cp -f {} {}; cp -f {} {};", src1, dst, src2, dst)',
+            'format!("install -d -m 700 {} && install -m 600 {} {} && install -m 600 {} {} &&", dst, src1, dst, src2, dst)'))
+
     patch(source / "src/flutter_ffi.rs", patch_android_native)
     patch(source / "src/server.rs", lambda s: replace_once(s,
         '    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;',

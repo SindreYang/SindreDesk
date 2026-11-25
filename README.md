@@ -214,6 +214,12 @@ Client 不注册为被控设备，使用 TCP 21116 探测私服可达性，显�
 
 0.x 开发版本允许暂缺 Windows Engine 哈希，仅供测试；建议仍勾选 Pre-release。已有但无效或不完整的配置继续拒绝构建。旧 Tag 不会自动包含新代码。
 
-### 电脑被控端开机自启
+### 电脑被控端系统级开机自启
 
-Windows x64 和 Linux x64 Host 首页提供「开机自启」开关，默认关闭。Windows 写入当前用户 Startup 文件夹的快捷方式；Linux 写入当前用户 XDG Autostart 目录。关闭开关删除对应启动项。移动软件目录后请重新关闭并开启开关以更新路径。该功能在用户登录桌面后启动程序，不是登录前系统服务，不保证锁屏/UAC 或无桌面环境可控制。Android、Client 和 Server 不受此功能影响。
+电脑 Host 采用原生永久密码认证。首次使用点击「生成 6 位连接密码」，保存弹窗中的随机密码后确认；不额外存储明文，重启后无需重新生成。忘记密码可在本机重新生成，旧密码失效。Android 仍使用原有密码流程。
+
+Windows：先配置私服、生成固定密码，再开启系统级自启。便携版会进入原生安装界面，Host 固定使用 Program Files 下的 SindreDeskHost 正式安装目录；管理员授权后由原生安装器导入配置并注册 Windows Service。安装完成后重新打开已安装 Host 检查状态。不要从可被普通用户修改的目录注册系统服务。
+
+Linux（systemd 桌面环境）：管理员从可信 Release 解压完整 Host 运行目录，然后将完整目录安装至 /usr/lib/sindredesk-host，并保证目录及文件 root 所有且普通用户不可写；将源码中 deploy/sindredesk-host.service 安装至 /etc/systemd/system/，执行 sudo systemctl daemon-reload。以普通用户启动 /usr/lib/sindredesk-host/sindredesk-host，配置私服并设置密码，再开启系统级自启。不要以 root 启动 GUI。原生服务同步配置后启用系统服务。关闭开关使用原生停止/卸载服务入口。
+
+注意：为匹配实际进程和服务名称，桌面 Host 的原生应用标识调整为 Windows SindreDeskHost、Linux sindredesk-host。升级旧版本的用户需要先备份旧配置，并重新核对连接码及私服配置；旧配置的自动迁移尚未实现。新版本重启后的 ID、密码和配置保持情况需要真实设备验证。Linux X11、Wayland 和登录管理器的登录前控制能力存在差异。六位密码应仅在可信私服和受限网络内使用。

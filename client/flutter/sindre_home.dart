@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'desktop_autostart.dart';
 
@@ -10,7 +11,7 @@ import 'package:provider/provider.dart';
 
 import '../common.dart';
 import '../models/platform_model.dart';
-import '../models/server_model.dart' show kUseTemporaryPassword;
+import '../models/server_model.dart' show kUseTemporaryPassword, kUsePermanentPassword;
 import '../mobile/pages/server_page.dart' as mobile;
 
 bool validPublicKey(String value) {
@@ -65,7 +66,8 @@ class _SindreHomeState extends State<SindreHome> {
       // 保留原生连接管理窗口，确保桌面被控者可断开会话。
       gFFI.serverModel.hideCm = false;
       unawaited(gFFI.serverModel.setApproveMode('password'));
-      unawaited(gFFI.serverModel.setVerificationMethod(kUseTemporaryPassword));
+      unawaited(gFFI.serverModel.setVerificationMethod(
+          DesktopAutostart.supported ? kUsePermanentPassword : kUseTemporaryPassword));
     }
     if (!host) {
       unawaited(_probeServer());
@@ -209,8 +211,11 @@ class _SindreHomeState extends State<SindreHome> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _value('本机连接码', model.serverId.text),
-          _value('连接密码', model.serverPasswd.text,
-            refresh: () => bind.mainUpdateTemporaryPassword()),
+          if (DesktopAutostart.supported)
+            const _FixedPasswordPanel()
+          else
+            _value('连接密码', model.serverPasswd.text,
+              refresh: () => bind.mainUpdateTemporaryPassword()),
           const Text('远程会话可在连接管理窗口中断开。'),
           if (DesktopAutostart.supported) const _DesktopAutostartSwitch(),
         ],
@@ -434,6 +439,87 @@ class _ServerSettingsState extends State<_ServerSettings> {
 }
 
 
+/// 原生永久密码只保存验证数据，不在 Flutter 中另存明文。
+class _FixedPasswordPanel extends StatefulWidget {
+  const _FixedPasswordPanel();
+
+  @override
+  State<_FixedPasswordPanel> createState() => _FixedPasswordPanelState();
+}
+
+class _FixedPasswordPanelState extends State<_FixedPasswordPanel> {
+  bool _busy = false;
+  bool? _ready;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_read());
+  }
+
+  Future<void> _read() async {
+    try {
+      final ready = await bind.mainGetCommon(key: 'permanent-password-set') == 'true';
+      if (mounted) setState(() => _ready = ready);
+    } catch (_) {
+      if (mounted) setState(() => _ready = null);
+    }
+  }
+
+  Future<void> _generate() async {
+    if (_busy || !bind.isIncomingOnly()) return;
+    setState(() => _busy = true);
+    try {
+      final random = Random.secure();
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+      final password = List.generate(6, (_) => alphabet[random.nextInt(alphabet.length)]).join();
+      if (!mounted) return;
+      final confirm = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text(_ready == true ? '重新生成连接密码' : '设置连接密码'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('固定密码仅在此处显示，请先保存。确认后旧密码失效。'),
+            SelectableText(password, style: Theme.of(context).textTheme.headlineSmall),
+            TextButton(onPressed: () => Clipboard.setData(ClipboardData(text: password)),
+              child: const Text('复制密码')),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('确认设置')),
+          ],
+        ),
+      );
+      if (confirm != true || !mounted) return;
+      final ok = await bind.mainSetPermanentPasswordWithResult(password: password);
+      if (!ok) throw StateError('Password update failed');
+      await gFFI.serverModel.setVerificationMethod(kUsePermanentPassword);
+      await _read();
+      if (mounted && _ready != true) throw StateError('Password state unavailable');
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('密码设置未确认，请检查被控服务状态')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(_ready == true ? '固定连接密码已设置' :
+          _ready == false ? '尚未设置固定连接密码' : '密码状态待确认'),
+      TextButton(onPressed: _busy ? null : _generate,
+        child: Text(_ready == true ? '重新生成 6 位密码' : '生成 6 位连接密码')),
+      const SizedBox(height: 8),
+    ],
+  );
+}
+
 class _DesktopAutostartSwitch extends StatefulWidget {
   const _DesktopAutostartSwitch();
 
@@ -445,11 +531,21 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
   bool? _enabled;
   bool _busy = false;
   String? _error;
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
     unawaited(_read());
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!_busy) unawaited(_read());
+    });
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
   }
 
   Future<void> _read() async {
@@ -457,7 +553,7 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
       final enabled = await DesktopAutostart.enabled();
       if (mounted) setState(() => _enabled = enabled);
     } catch (_) {
-      if (mounted) setState(() => _error = '无法读取开机自启设置');
+      if (mounted) setState(() => _enabled = null);
     }
   }
 
@@ -465,13 +561,33 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
     if (_busy || !bind.isIncomingOnly()) return;
     setState(() { _busy = true; _error = null; });
     try {
-      await DesktopAutostart.setEnabled(value);
-      final actual = await DesktopAutostart.enabled();
-      if (actual != value) throw StateError('Startup setting mismatch');
-      if (mounted) setState(() => _enabled = actual);
+      if (value) {
+        if (!validServer(bind.mainGetOptionSync(key: 'custom-rendezvous-server')) ||
+            !validPublicKey(bind.mainGetOptionSync(key: 'key')) ||
+            await bind.mainGetCommon(key: 'permanent-password-set') != 'true') {
+          if (mounted) setState(() => _error = '请先配置私服和固定连接密码');
+          return;
+        }
+        if (!bind.mainIsInstalled()) {
+          if (Platform.isWindows) {
+            await bind.mainSetOption(key: 'stop-service', value: '');
+            bind.mainGotoInstall();
+          } else if (mounted) {
+            setState(() => _error = '请先按 README 安装 Linux 系统服务，再从已安装目录启动 Host');
+          }
+          return;
+        }
+      }
+      await DesktopAutostart.requestChange(value);
+      // 原生安装器可能关闭并重启当前界面；不将发出请求视为安装成功。
+      for (var i = 0; i < 15 && mounted; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await _read();
+        if (_enabled == value) return;
+      }
+      if (mounted) setState(() => _error = '尚未确认系统服务状态，请检查管理员授权');
     } catch (_) {
-      await _read();
-      if (mounted) setState(() => _error = '设置失败，请检查当前用户权限');
+      if (mounted) setState(() => _error = '系统服务操作失败，请检查安装及权限');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -483,8 +599,8 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
     children: [
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('开机自启'),
-        subtitle: const Text('登录当前系统用户后启动被控端'),
+        title: const Text('系统级开机自启'),
+        subtitle: const Text('需要管理员授权；系统服务在登录前启动'),
         value: _enabled ?? false,
         onChanged: _busy || _enabled == null ? null : _change,
       ),
