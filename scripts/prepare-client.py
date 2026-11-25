@@ -265,7 +265,8 @@ def patch_rendezvous_mediator(text):
             .collect::<String>();
         Config::set_option("sindre-lan-fingerprint".to_owned(), fingerprint);
         Config::set_option("enable-lan-discovery".to_owned(), "Y".to_owned());
-        Config::set_option(OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned());''')
+        Config::set_option(OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned());
+        Config::set_option("direct-access-port".to_owned(), (RENDEZVOUS_PORT + 2).to_string());''')
     text = replace_once(text,
         '''        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let start_lan_listening = crate::platform::is_installed();''',

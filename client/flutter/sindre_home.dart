@@ -656,7 +656,7 @@ class _LanConnectionInfoState extends State<_LanConnectionInfo> {
       margin: const EdgeInsets.only(top: 12, bottom: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.45),
+        color: Theme.of(context).colorScheme.surface.withOpacity(0.92),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
