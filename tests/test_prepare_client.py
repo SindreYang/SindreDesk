@@ -137,8 +137,20 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("ip: other.ip", result)
         self.assertIn("fingerprint == other.fingerprint", result)
 
+    def test_native_lan_security_guards(self):
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("sindre-lan-peer-fingerprint", source)
+        self.assertIn("Some(host_sign_pk)", source)
+        self.assertIn("host_signing_pk.into()", source)
+        self.assertIn("IpAddr::V4(ip) if ip.is_private()", source)
+        self.assertIn("Config::set_option(OPTION_DIRECT_SERVER.to_owned(),", source)
+        self.assertIn('Config::set_option("direct-access-port".to_owned()', source)
+        self.assertIn('misc: Config::get_option("sindre-lan-fingerprint")', source)
+        self.assertIn("fingerprint: p.misc.clone()", source)
+        self.assertNotIn("Secure offline LAN mode is not available", source)
+
     def test_lan_peer_data_patches(self):
-        lan = '''platform: whoami::platform().to_string(),
+        lan = '''                                    platform: whoami::platform().to_string(),
                                     ..Default::default()
                                     platform: p.platform.clone(),
                                     online: true,'''
