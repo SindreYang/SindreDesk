@@ -68,28 +68,31 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("Random.secure()", ui)
         self.assertIn("List.generate(6,", ui)
         self.assertIn("mainSetPermanentPasswordWithResult", ui)
-        self.assertIn("DesktopAutostart.supported ? kUsePermanentPassword : kUseTemporaryPassword", ui)
+        self.assertIn("setVerificationMethod(kUsePermanentPassword)", ui)
+        self.assertNotIn("kUseTemporaryPassword", ui)
+        self.assertNotIn("mainUpdateTemporaryPassword", ui)
         unit = (ROOT / "deploy/sindredesk-host.service").read_text()
         self.assertIn("ExecStart=/usr/lib/sindredesk-host/sindredesk-host --service", unit)
 
     def test_compact_desktop_home(self):
         ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
-        self.assertIn("if (isDesktop) return _desktopHome(context);", ui)
-        self.assertIn("FilteringTextInputFormatter.allow(RegExp(r'[0-9.:]'))", ui)
+        self.assertIn("Widget build(BuildContext context)", ui)
+        self.assertIn("bottomNavigationBar: host ? SafeArea", ui)
+        self.assertIn("const _LanConnectionInfo()", ui)
+        self.assertIn("FilteringTextInputFormatter.allow(RegExp(r'[0-9.: ]'))", ui)
         source = (ROOT / "scripts/prepare-client.py").read_text()
         self.assertIn("TitleBarStyle.normal", source)
-        self.assertIn("const Size(440, 440)", source)
-        self.assertIn("const Size(480, 540)", source)
+        self.assertIn("const Size(420, 480)", source)
 
     def test_host_info_independent_of_server(self):
         ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
-        self.assertIn("body: host && isAndroid\n          ? const _AndroidHostPanel()", ui)
+        self.assertIn("if (host && isAndroid) const _AndroidHostPanel()", ui)
         android = ui.split("class _AndroidHostPanelState", 1)[1].split("class _ServerSettings", 1)[0]
         self.assertNotIn("configured", android)
         self.assertIn("gFFI.serverModel.fetchID();", android)
-        self.assertIn("'本机连接码（服务器连接）', model.serverId.text", android)
-        self.assertIn("const _LanConnectionInfo()", android)
-        self.assertIn("'连接密码', model.serverPasswd.text", android)
+        self.assertIn("'本机连接码', model.serverId.text", ui)
+        self.assertIn("const _FixedPasswordPanel()", ui)
+        self.assertNotIn("model.serverPasswd.text", ui)
         self.assertIn("if (!model.isStart) mobile.ServiceNotRunningNotification()", android)
         source = (ROOT / "scripts/prepare-client.py").read_text()
         self.assertNotIn('Secure offline LAN mode is not available', source)
@@ -102,6 +105,21 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn('NetworkInterface.list', ui)
         self.assertIn('Incoming connections require Host role and encryption', source)
 
+
+    def test_fixed_password_native_cache(self):
+        source = ('pub fn main_set_permanent_password_with_result(password: String) -> bool {\n'
+                  '    ui_interface::set_permanent_password_with_result(password)\n}\n'
+                  'pub fn main_get_common(key: String) -> String {\n}')
+        result = module.patch_fixed_password(source)
+        self.assertIn('symmetric_crypt(password.as_bytes(), true)', result)
+        self.assertIn('symmetric_crypt(&cipher, false)', result)
+        self.assertIn('decode_permanent_password_h1_from_storage', result)
+        self.assertIn('Ok(Some(value)) if value == "N"', result)
+        self.assertIn('return "unavailable".to_owned()', result)
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("state == 'missing'", ui)
+        self.assertIn("sindre-fixed-password", ui)
+        self.assertIn("state.startsWith('ready:')", ui)
 
     def test_lan_peer_model_patch(self):
         source = '''class Peer {
