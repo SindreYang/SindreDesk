@@ -205,7 +205,7 @@ class _SindreHomeState extends State<SindreHome> {
   }
 
   Future<void> _selectLanPeer(Peer peer) async {
-    if (peer.ip.isEmpty || !validFingerprint(peer.fingerprint)) return;
+    if (!_isPrivateIPv4(peer.ip) || !validFingerprint(peer.fingerprint)) return;
     final address = '${peer.ip}:21118';
     final accepted = await showDialog<bool>(
       context: context,
@@ -300,7 +300,7 @@ class _SindreHomeState extends State<SindreHome> {
         animation: gFFI.lanPeersModel,
         builder: (context, _) {
           final peers = gFFI.lanPeersModel.peers
-              .where((peer) => peer.ip.isNotEmpty)
+              .where((peer) => _isPrivateIPv4(peer.ip))
               .take(8)
               .toList();
           if (peers.isEmpty) {
@@ -321,7 +321,7 @@ class _SindreHomeState extends State<SindreHome> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 trailing: TextButton(
-                  onPressed: validFingerprint(peer.fingerprint)
+                  onPressed: _isPrivateIPv4(peer.ip) && validFingerprint(peer.fingerprint)
                       ? () => _selectLanPeer(peer)
                       : null,
                   child: const Text('使用'),
