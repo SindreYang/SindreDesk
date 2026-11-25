@@ -8,6 +8,18 @@
 
 > 当前为开发测试版。新界面和固定密码尚需跨平台构建与真机验收；请勿将其用于未经验证的生产或无人值守场景。
 
+## 界面预览
+
+<table>
+<tr><th>Host（被控端）</th><th>Client（控制端）</th></tr>
+<tr>
+<td><img src="docs/images/host-home.svg" alt="Host 首页：本机连接码、固定密码、局域网 IP" width="340"></td>
+<td><img src="docs/images/client-home.svg" alt="Client 首页：输入 IP 或连接码及密码" width="340"></td>
+</tr>
+</table>
+
+> 以上为按当前界面源码绘制的示意图，连接码、密码、IP 和设备名均为演示数据，并非实际运行截图。
+
 ## 1. 下载并安装
 
 前往 [版本下载](https://github.com/SindreYang/SindreDesk/releases)，选择对应设备和角色。
@@ -39,6 +51,10 @@
 ### 局域网兼容模式（测试）
 
 若局域网加密握手失败，可在 Host 和 Client 的右上角设置中分别开启「局域网兼容模式」。之后仍只输入 IP 和固定密码，软件先尝试加密连接，失败后自动尝试一次非加密连接。开关默认关闭，设置后立即生效；该模式仅适用于可信私有 IPv4 局域网，不影响连接码或跨网络连接。非加密会话可能被监听或篡改，测试结束后请关闭。已知设备身份变化或密码错误不会触发降级。
+
+<p><img src="docs/images/host-settings.svg" alt="Host 设置：服务器配置、局域网兼容模式及系统级开机自启" width="340"></p>
+
+*Host 设置界面示意（兼容模式默认关闭）。Client 设置同样提供服务器配置和局域网兼容模式。*
 
 ## 3. 不同网络连接
 
