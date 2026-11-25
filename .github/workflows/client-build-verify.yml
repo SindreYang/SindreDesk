@@ -261,6 +261,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/windows-portable"
           cp target/release/rustdesk-portable-packer.exe "$GITHUB_WORKSPACE/windows-portable/$app.exe"
           test -s "$GITHUB_WORKSPACE/windows-portable/$app.exe"
+          "$GITHUB_WORKSPACE/windows-portable/$app.exe" --sindre-verify-package
+          test -s "$GITHUB_WORKSPACE/windows-portable/$app.log"
       - name: Configure Android signing
         if: matrix.platform == 'android'
         env:

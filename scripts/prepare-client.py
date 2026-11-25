@@ -285,8 +285,18 @@ def patch_client(text):
                 })?;
             crate::sindre_diag::record("lan-tcp-connected", Some(address), None);
             let bytes = timeout(READ_TIMEOUT, conn.next())
-                .await?
-                .ok_or_else(|| anyhow!("LAN host closed before identity exchange"))??;
+                .await.map_err(|err| {
+                    crate::sindre_diag::record("lan-identity-timeout", Some(address), None);
+                    err
+                })?
+                .ok_or_else(|| {
+                    crate::sindre_diag::record("lan-identity-peer-closed", Some(address), None);
+                    anyhow!("LAN host closed before identity exchange")
+                })?
+                .map_err(|err| {
+                    crate::sindre_diag::record("lan-identity-read-failed", Some(address), None);
+                    err
+                })?;
             let identity = Message::parse_from_bytes(&bytes).map_err(|err| {
                 crate::sindre_diag::record("lan-invalid-protobuf", Some(address), None);
                 err
@@ -475,6 +485,12 @@ pub(crate) fn sindre_lan_status() -> String {
 fn get_direct_port() -> i32 {
     i32::from(hbb_common::config::SINDRE_LAN_DIRECT_PORT)
 }''')
+    text = replace_once(text,
+        '        if !disabled && listener.is_none() {',
+        '''        if disabled {
+            SINDRE_LAN_STATUS.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        if !disabled && listener.is_none() {''')
     text = replace_once(text, '                    listener = Some(l);',
         '''                    listener = Some(l);
                     SINDRE_LAN_STATUS.store(1, std::sync::atomic::Ordering::Relaxed);
@@ -792,7 +808,36 @@ def patch_windows_portable(source, role):
         '        // Different builds have different payload directories.')
     text = replace_once(text, '            ui::setup();', '            // Do not show the upstream RustDesk-branded splash.')
     text = replace_once(text, '        file.write_to_file(&dir);',
-        '        if file.write_to_file(&dir).is_err() { return None; }')
+        '        if file.write_to_file(&dir).is_err() { portable_diagnostic("extract-failed"); return None; }')
+    text = replace_once(text, 'fn main() {',
+        f'''fn portable_diagnostic(event: &str) {{
+    use std::io::Write;
+    if let Ok(exe) = std::env::current_exe() {{
+        if let Some(parent) = exe.parent() {{
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true)
+                .open(parent.join("{app}.log")) {{
+                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_secs();
+                let _ = writeln!(file, "{{}} pid={{}} event={{}}", time, std::process::id(), event);
+            }}
+        }}
+    }}
+}}
+
+fn main() {{
+    portable_diagnostic("portable-start");''')
+    text = replace_once(text, '    let _child = cmd.spawn();',
+        '    let _child = cmd.spawn();\n    if _child.is_err() { portable_diagnostic("launch-failed"); std::process::exit(1); }')
+    text = replace_once(text, '        execute(exe, args, ui);\n    }',
+        '''        portable_diagnostic("extract-verified");
+        if args == vec!["--sindre-verify-package".to_owned()] {
+            std::process::exit(0);
+        }
+        execute(exe, args, ui);
+    } else {
+        portable_diagnostic("setup-failed");
+        std::process::exit(1);
+    }''')
     text = replace_once(text, '    let mut cmd = Command::new(path);',
         '''    let mut cmd = Command::new(&path);
     if let Some(parent) = path.parent() { cmd.current_dir(parent); }
@@ -882,6 +927,11 @@ def prepare(source, role):
     patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;'))
     patch(source / "src/core_main.rs", lambda s: replace_once(s, '    hbb_common::init_log(false, &log_name);',
         '    hbb_common::init_log(false, &log_name);\n    crate::sindre_diag::record("desktop-start", None, None);'))
+    patch(source / "src/server/connection.rs", lambda s: replace_once(
+        replace_once(s, '        self.authorized = true;',
+            '        self.authorized = true;\n        crate::sindre_diag::record("session-authorized", None, None);'),
+        '    async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {',
+        '    async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {\n        crate::sindre_diag::record("session-login-rejected", None, None);'))
     patch(source / "src/ui_interface.rs", patch_ui_interface)
     patch(source / "flutter/lib/models/peer_model.dart", patch_peer_model)
     patch(source / "flutter/lib/main.dart", patch_main)

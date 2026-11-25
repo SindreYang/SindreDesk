@@ -234,6 +234,9 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("OpenOptions", log)
         workflow = (ROOT / ".github/workflows/client-build-verify.yml").read_text()
         self.assertIn("python generate.py", workflow)
+        self.assertIn("--sindre-verify-package", workflow)
+        self.assertIn("session-login-rejected", source)
+        self.assertIn("lan-identity-timeout", source)
         self.assertIn("sha256sum *.apk *.exe *.tar.gz", workflow)
 
     def test_workflow_release_only(self):
