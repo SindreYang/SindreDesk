@@ -72,6 +72,110 @@ class PrepareClientTests(unittest.TestCase):
         unit = (ROOT / "deploy/sindredesk-host.service").read_text()
         self.assertIn("ExecStart=/usr/lib/sindredesk-host/sindredesk-host --service", unit)
 
+    def test_compact_desktop_home(self):
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("if (isDesktop) return _desktopHome(context);", ui)
+        self.assertIn("FilteringTextInputFormatter.allow(RegExp(r'[0-9.:]'))", ui)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("TitleBarStyle.normal", source)
+        self.assertIn("const Size(440, 440)", source)
+        self.assertIn("const Size(480, 540)", source)
+
+    def test_host_info_independent_of_server(self):
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("body: host && isAndroid\n          ? const _AndroidHostPanel()", ui)
+        android = ui.split("class _AndroidHostPanelState", 1)[1].split("class _ServerSettings", 1)[0]
+        self.assertNotIn("configured", android)
+        self.assertIn("gFFI.serverModel.fetchID();", android)
+        self.assertIn("'本机连接码（服务器连接）', model.serverId.text", android)
+        self.assertIn("const _LanConnectionInfo()", android)
+        self.assertIn("'连接密码', model.serverPasswd.text", android)
+        self.assertIn("if (!model.isStart) mobile.ServiceNotRunningNotification()", android)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertNotIn('Secure offline LAN mode is not available', source)
+        self.assertIn('sindre-lan-peer-fingerprint', source)
+        self.assertIn('Some(host_sign_pk)', source)
+        self.assertIn('is_private()', source)
+        self.assertIn('patch_rendezvous_mediator', source)
+        self.assertIn('patch_lan', source)
+        self.assertIn('mainDiscover', ui)
+        self.assertIn('NetworkInterface.list', ui)
+        self.assertIn('Incoming connections require Host role and encryption', source)
+
+
+    def test_lan_peer_model_patch(self):
+        source = '''class Peer {
+  final String id;
+  Peer.fromJson(Map<String, dynamic> json)
+      : id = json['id'] ?? '',
+        hash = json['hash'] ?? '';
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      "id": id,
+      "hash": hash,
+    };
+  }
+  Peer({
+    required this.id,
+  });
+  bool equal(Peer other) {
+    return id == other.id &&
+        hash == other.hash;
+  }
+  factory Peer.copy(Peer other) {
+    final peer = Peer(
+        id: other.id,
+        hash: other.hash);
+    return peer;
+  }
+}'''
+        result = module.patch_peer_model(source)
+        self.assertIn("final String ip;", result)
+        self.assertIn("final String fingerprint;", result)
+        self.assertIn("ip = json['ip'] ?? ''", result)
+        self.assertIn('"fingerprint": fingerprint', result)
+        self.assertIn("ip: other.ip", result)
+        self.assertIn("fingerprint == other.fingerprint", result)
+
+    def test_native_lan_security_guards(self):
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("sindre-lan-peer-fingerprint", source)
+        self.assertIn("Some(host_sign_pk)", source)
+        self.assertIn("host_signing_pk.into()", source)
+        self.assertIn("IpAddr::V4(ip) if ip.is_private()", source)
+        self.assertIn("Config::set_option(OPTION_DIRECT_SERVER.to_owned(),", source)
+        self.assertIn('Config::set_option("direct-access-port".to_owned()', source)
+        self.assertIn('misc: Config::get_option("sindre-lan-fingerprint")', source)
+        self.assertIn("fingerprint: p.misc.clone()", source)
+        self.assertNotIn("Secure offline LAN mode is not available", source)
+
+    def test_lan_peer_data_patches(self):
+        lan = '''                                    platform: whoami::platform().to_string(),
+                                    ..Default::default()
+                                    platform: p.platform.clone(),
+                                    online: true,'''
+        result = module.patch_lan(lan)
+        self.assertIn('misc: Config::get_option("sindre-lan-fingerprint")', result)
+        self.assertIn("fingerprint: p.misc.clone()", result)
+        ui = '''                ("platform", peer.platform.clone()),
+            ])'''
+        result = module.patch_ui_interface(ui)
+        self.assertIn('("ip", peer.ip_mac.keys().next().cloned().unwrap_or_default())', result)
+        self.assertIn('("fingerprint", peer.fingerprint.clone())', result)
+
+    def test_desktop_icon_format(self):
+        import struct
+        png, ico = module.desktop_icon_files()
+        self.assertEqual(png[:8], bytes.fromhex("89504e470d0a1a0a"))
+        self.assertEqual(struct.unpack_from("<HHH", ico), (0, 1, 7))
+        for i in range(7):
+            width, height, _, _, planes, depth, size, offset = struct.unpack_from(
+                "<BBBBHHII", ico, 6 + i * 16)
+            self.assertEqual(width, height)
+            self.assertEqual((planes, depth), (1, 32))
+            self.assertLessEqual(offset + size, len(ico))
+        self.assertEqual(ico[-len(png):], png)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])

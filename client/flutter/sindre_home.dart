@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 
 import '../common.dart';
 import '../models/platform_model.dart';
+import '../models/peer_model.dart';
 import '../models/server_model.dart' show kUseTemporaryPassword, kUsePermanentPassword;
 import '../mobile/pages/server_page.dart' as mobile;
 
@@ -21,6 +22,28 @@ bool validPublicKey(String value) {
     return false;
   }
 }
+
+bool _isPrivateIPv4(String value) {
+  final ip = InternetAddress.tryParse(value);
+  if (ip == null || ip.type != InternetAddressType.IPv4) return false;
+  final parts = value.split('.').map(int.tryParse).toList();
+  if (parts.length != 4 || parts.any((part) => part == null)) return false;
+  final a = parts[0]!;
+  final b = parts[1]!;
+  return a == 10 ||
+      (a == 192 && b == 168) ||
+      (a == 172 && b >= 16 && b <= 31);
+}
+
+bool _isPrivateLanAddress(String value) {
+  final parts = value.trim().split(':');
+  if (parts.length > 2) return false;
+  final port = parts.length == 2 ? int.tryParse(parts[1]) : 21118;
+  return port == 21118 && _isPrivateIPv4(parts.first);
+}
+
+bool validFingerprint(String value) =>
+    RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value.replaceAll(RegExp(r'[:\s]'), ''));
 
 bool validServer(String value) {
   final host = value.trim();
@@ -37,6 +60,25 @@ bool validServer(String value) {
   return !RegExp(r'(^|\.)rustdesk\.com$', caseSensitive: false).hasMatch(host);
 }
 
+Widget _connectionValue(BuildContext context, String title, String value, {VoidCallback? refresh}) {
+  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(title, style: Theme.of(context).textTheme.labelLarge),
+    Row(children: [
+      Expanded(child: SelectableText(value,
+        style: Theme.of(context).textTheme.headlineSmall)),
+      IconButton(
+        tooltip: '复制',
+        onPressed: () => Clipboard.setData(ClipboardData(text: value)),
+        icon: const Icon(Icons.copy_outlined),
+      ),
+      if (refresh != null)
+        IconButton(tooltip: '刷新密码', onPressed: refresh,
+          icon: const Icon(Icons.refresh)),
+    ]),
+    const SizedBox(height: 12),
+  ]);
+}
+
 class SindreHome extends StatefulWidget {
   const SindreHome({super.key});
 
@@ -47,8 +89,11 @@ class SindreHome extends StatefulWidget {
 class _SindreHomeState extends State<SindreHome> {
   final _id = TextEditingController();
   final _password = TextEditingController();
+  final _fingerprint = TextEditingController();
   Timer? _timer;
+  Timer? _lanScanTimer;
   bool _busy = false;
+  bool _showPassword = false;
   String _message = '';
   bool? _reachable;
   int _probeGeneration = 0;
@@ -74,6 +119,8 @@ class _SindreHomeState extends State<SindreHome> {
       _timer = Timer.periodic(const Duration(seconds: 5), (_) {
         unawaited(_probeServer());
       });
+      _scanLan();
+      _lanScanTimer = Timer.periodic(const Duration(seconds: 15), (_) => _scanLan());
     }
     if (host && isDesktop) {
       gFFI.serverModel.fetchID();
@@ -89,6 +136,8 @@ class _SindreHomeState extends State<SindreHome> {
     _timer?.cancel();
     _id.dispose();
     _password.dispose();
+    _fingerprint.dispose();
+    _lanScanTimer?.cancel();
     super.dispose();
   }
 
@@ -136,56 +185,162 @@ class _SindreHomeState extends State<SindreHome> {
     }
   }
 
+  void _onIdChanged(String value) {
+    final address = value.replaceAll(' ', '').trim();
+    if (_isPrivateLanAddress(address)) {
+      final saved = bind.mainGetOptionSync(
+        key: 'sindre-lan-peer-fingerprint:$address',
+      );
+      if (saved.isNotEmpty) _fingerprint.text = saved;
+    } else {
+      _fingerprint.clear();
+    }
+    setState(() {});
+  }
+
+  void _scanLan() {
+    if (!mounted || host) return;
+    bind.mainLoadLanPeers();
+    bind.mainDiscover();
+  }
+
+  Future<void> _selectLanPeer(Peer peer) async {
+    if (peer.ip.isEmpty || !validFingerprint(peer.fingerprint)) return;
+    final address = '${peer.ip}:21118';
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('核对局域网设备'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
+            const SizedBox(height: 8),
+            SelectableText(address),
+            const SizedBox(height: 8),
+            const Text('请与被控端屏幕显示的设备指纹逐字符核对。指纹不一致时不要继续。'),
+            const SizedBox(height: 8),
+            SelectableText(peer.fingerprint),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true),
+            child: const Text('已核对，使用此设备')),
+        ],
+      ),
+    );
+    if (accepted == true && mounted) {
+      setState(() {
+        _id.text = address;
+        _fingerprint.text = peer.fingerprint;
+        _message = '';
+      });
+    }
+  }
+
   Future<void> _connect() async {
     if (_busy) return;
     final id = _id.text.replaceAll(' ', '').trim();
     final password = _password.text;
-    if (!configured) {
-      setState(() => _message = '请先配置服务器地址和公钥');
-      return;
+    final direct = _isPrivateLanAddress(id);
+    if (direct) {
+      final fingerprint = _fingerprint.text
+          .replaceAll(RegExp(r'[:\s]'), '')
+          .trim()
+          .toLowerCase();
+      if (!validFingerprint(fingerprint)) {
+        setState(() => _message = '请填写并核对被控端显示的 64 位设备指纹');
+        return;
+      }
+      await bind.mainSetOption(
+        key: 'sindre-lan-peer-fingerprint:${id}',
+        value: fingerprint,
+      );
+    } else {
+      if (!RegExp(r'^[0-9]+$').hasMatch(id)) {
+        setState(() => _message = '请输入连接码或局域网 IPv4 地址');
+        return;
+      }
+      if (!configured) {
+        setState(() => _message = '连接码需要配置私有服务器；局域网可直接使用 IP 地址');
+        return;
+      }
     }
-    // 只开放连接码；安全离线局域网协议尚未完成。
-    if (!RegExp(r'^[0-9]+$').hasMatch(id) || password.isEmpty) {
-      setState(() => _message = '请输入连接码和密码');
+    if (password.isEmpty) {
+      setState(() => _message = '请输入连接密码');
       return;
     }
     setState(() { _busy = true; _message = ''; });
     _password.clear();
     try {
       await connect(context, id, password: password);
-    } catch (_) {
-      if (mounted) setState(() => _message = '无法发起连接，请检查配置');
+    } catch (error) {
+      if (mounted) setState(() => _message = '连接失败：${error.toString()}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Widget _value(String title, String value, {VoidCallback? refresh}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: Theme.of(context).textTheme.labelLarge),
+  Widget _lanDiscoveryPanel() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
       Row(children: [
-        Expanded(child: SelectableText(value,
-          style: Theme.of(context).textTheme.headlineSmall)),
-        IconButton(
-          tooltip: '复制',
-          onPressed: () => Clipboard.setData(ClipboardData(text: value)),
-          icon: const Icon(Icons.copy_outlined),
+        Expanded(child: Text('局域网设备', style: Theme.of(context).textTheme.titleSmall)),
+        TextButton.icon(
+          onPressed: _scanLan,
+          icon: const Icon(Icons.refresh, size: 16),
+          label: const Text('扫描'),
         ),
-        if (refresh != null)
-          IconButton(tooltip: '刷新密码', onPressed: refresh,
-            icon: const Icon(Icons.refresh)),
       ]),
-      const SizedBox(height: 12),
-    ]);
-  }
-
-  Widget _serverStatus() => AnimatedBuilder(
+      AnimatedBuilder(
+        animation: gFFI.lanPeersModel,
+        builder: (context, _) {
+          final peers = gFFI.lanPeersModel.peers
+              .where((peer) => peer.ip.isNotEmpty)
+              .take(8)
+              .toList();
+          if (peers.isEmpty) {
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('尚未发现设备。请确认两端处于同一局域网，并允许 UDP 21119。'),
+            );
+          }
+          return Column(children: [
+            for (final peer in peers)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
+                subtitle: Text(
+                  "${peer.ip}:21118\n${validFingerprint(peer.fingerprint) ? peer.fingerprint : '此设备不支持安全直连'}",
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: TextButton(
+                  onPressed: validFingerprint(peer.fingerprint)
+                      ? () => _selectLanPeer(peer)
+                      : null,
+                  child: const Text('使用'),
+                ),
+              ),
+          ]);
+        },
+      ),
+      const SizedBox(height: 8),
+    ],
+  );
+  Widget _serverStatus({bool compact = false}) => AnimatedBuilder(
     animation: gFFI.serverModel,
     builder: (context, _) {
       final status = gFFI.serverModel.connectStatus;
       final ready = configured && (host ? status > 0 : _reachable == true);
       final failed = host ? status < 0 : _reachable == false;
-      final label = !configured ? '未配置服务器' :
+      final label = !configured
+          ? (host ? '未配置服务器 · 局域网直连' : '未配置服务器 · 可扫描局域网') :
           ready ? (host ? '服务器已连接' : '服务器可达') :
           failed ? (host ? '服务器未就绪' : '服务器不可达') :
           host ? '正在连接服务器' : '正在检测服务器';
@@ -193,11 +348,11 @@ class _SindreHomeState extends State<SindreHome> {
           !configured ? Theme.of(context).colorScheme.outline :
           failed ? Theme.of(context).colorScheme.error : Colors.orange;
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 20, vertical: compact ? 6 : 10),
         child: Row(children: [
           Icon(Icons.circle, size: 10, color: color),
           const SizedBox(width: 8),
-          Expanded(child: Text(label)),
+          Expanded(child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
         ]),
       );
     },
@@ -210,11 +365,12 @@ class _SindreHomeState extends State<SindreHome> {
       builder: (_, __) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _value('本机连接码', model.serverId.text),
+          _connectionValue(context, '本机连接码（服务器连接）', model.serverId.text),
+          const _LanConnectionInfo(),
           if (DesktopAutostart.supported)
             const _FixedPasswordPanel()
           else
-            _value('连接密码', model.serverPasswd.text,
+            _connectionValue(context, '连接密码', model.serverPasswd.text,
               refresh: () => bind.mainUpdateTemporaryPassword()),
           const Text('远程会话可在连接管理窗口中断开。'),
           if (DesktopAutostart.supported) const _DesktopAutostartSwitch(),
@@ -226,15 +382,41 @@ class _SindreHomeState extends State<SindreHome> {
   Widget _client() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      TextField(controller: _id,
-        decoration: const InputDecoration(labelText: '连接码', border: OutlineInputBorder()),
-        keyboardType: TextInputType.number),
+      TextField(
+        controller: _id,
+        decoration: const InputDecoration(
+          labelText: '连接码 / 局域网 IP',
+          hintText: '连接码或 192.168.1.20:21118',
+          border: OutlineInputBorder(),
+        ),
+        keyboardType: TextInputType.text,
+        onChanged: _onIdChanged,
+      ),
+      if (_isPrivateLanAddress(_id.text)) ...[
+        const SizedBox(height: 12),
+        TextField(
+          controller: _fingerprint,
+          autocorrect: false,
+          enableSuggestions: false,
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F: ]'))],
+          decoration: const InputDecoration(
+            labelText: '设备指纹（请与被控端核对）',
+            hintText: '64 位 SHA-256 指纹',
+            border: OutlineInputBorder(),
+          ),
+        ),
+      ],
       const SizedBox(height: 16),
-      TextField(controller: _password, obscureText: true,
-        autocorrect: false, enableSuggestions: false,
-        decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder()),
-        onSubmitted: (_) => _connect()),
-      const SizedBox(height: 16),
+      TextField(
+        controller: _password,
+        obscureText: true,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: const InputDecoration(labelText: '连接密码', border: OutlineInputBorder()),
+        onSubmitted: (_) => _connect(),
+      ),
+      const SizedBox(height: 12),
+      _lanDiscoveryPanel(),
       FilledButton(onPressed: _busy ? null : _connect, child: const Text('连接')),
       if (_message.isNotEmpty) Padding(
         padding: const EdgeInsets.only(top: 12),
@@ -242,8 +424,148 @@ class _SindreHomeState extends State<SindreHome> {
     ],
   );
 
+  Widget _desktopClient() {
+    final colors = Theme.of(context).colorScheme;
+    final border = OutlineInputBorder(borderRadius: BorderRadius.circular(8));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('连接码', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _id,
+          keyboardType: TextInputType.text,
+          textInputAction: TextInputAction.next,
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.:]'))],
+          onChanged: _onIdChanged,
+          decoration: InputDecoration(
+            hintText: '连接码或 192.168.1.20:21118',
+            isDense: true,
+            prefixIcon: const Icon(Icons.computer_outlined, size: 20),
+            border: border,
+          ),
+        ),
+        if (_isPrivateLanAddress(_id.text)) ...[
+          const SizedBox(height: 12),
+          Text('设备指纹（请与被控端核对）', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _fingerprint,
+            autocorrect: false,
+            enableSuggestions: false,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F: ]'))],
+            decoration: InputDecoration(
+              hintText: '64 位 SHA-256 指纹',
+              isDense: true,
+              border: border,
+            ),
+          ),
+        ],
+        const SizedBox(height: 14),
+        Text('连接密码', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _password,
+          obscureText: !_showPassword,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _connect(),
+          decoration: InputDecoration(
+            hintText: '输入对方设备密码',
+            isDense: true,
+            prefixIcon: const Icon(Icons.lock_outline, size: 20),
+            suffixIcon: IconButton(
+              tooltip: _showPassword ? '隐藏密码' : '显示密码',
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+              icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
+            ),
+            border: border,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _lanDiscoveryPanel(),
+        const SizedBox(height: 8),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF1769D2),
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(42),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          onPressed: _busy ? null : _connect,
+          child: Text(_busy ? '连接中…' : '连接'),
+        ),
+        if (_message.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 10),
+            child: Text(_message, style: TextStyle(color: colors.error))),
+      ],
+    );
+  }
+
+  Widget _desktopHome(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final background = theme.brightness == Brightness.dark
+        ? const Color(0xFF17191D) : const Color(0xFFF4F6F9);
+    final surface = theme.brightness == Brightness.dark
+        ? const Color(0xFF21242A) : Colors.white;
+    return Scaffold(
+      backgroundColor: background,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(host ? '本机设备' : '远程连接',
+                          style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(host ? '允许其他设备连接本机' : '输入被控设备的连接信息',
+                          style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
+                      ],
+                    )),
+                    IconButton(
+                      tooltip: '服务器设置',
+                      onPressed: _settings,
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                  ]),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: colors.outlineVariant),
+                    ),
+                    child: host ? _hostDesktop() : _desktopClient(),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: _serverStatus(compact: true)),
+                    if (!configured)
+                      TextButton(onPressed: _settings, child: const Text('配置服务器')),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (isDesktop) return _desktopHome(context);
     // Android 被控复用原生权限检查、共享授权和会话断开组件。
     return Scaffold(
       appBar: AppBar(
@@ -256,9 +578,7 @@ class _SindreHomeState extends State<SindreHome> {
       ),
       bottomNavigationBar: SafeArea(child: _serverStatus()),
       body: host && isAndroid
-          ? configured
-              ? const _AndroidHostPanel()
-              : const Center(child: Text('请先配置服务器地址和公钥'))
+          ? const _AndroidHostPanel()
           : Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
@@ -268,6 +588,103 @@ class _SindreHomeState extends State<SindreHome> {
                 ),
               ),
             ),
+    );
+  }
+}
+
+
+class _LanConnectionInfo extends StatefulWidget {
+  const _LanConnectionInfo();
+
+  @override
+  State<_LanConnectionInfo> createState() => _LanConnectionInfoState();
+}
+
+class _LanConnectionInfoState extends State<_LanConnectionInfo> {
+  Timer? _timer;
+  List<String> _addresses = [];
+  String _fingerprint = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      final addresses = interfaces
+          .expand((interface) => interface.addresses)
+          .map((address) => address.address)
+          .where(_isPrivateIPv4)
+          .toSet()
+          .toList()
+        ..sort();
+      final fingerprint = bind.mainGetOptionSync(key: 'sindre-lan-fingerprint');
+      if (mounted && (addresses.join(',') != _addresses.join(',') ||
+          fingerprint != _fingerprint)) {
+        setState(() {
+          _addresses = addresses;
+          _fingerprint = fingerprint;
+        });
+      }
+    } catch (_) {
+      // Network enumeration may be temporarily unavailable while interfaces change.
+    }
+  }
+
+  Widget _copyable(String label, String value) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Expanded(child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+          SelectableText(value, style: Theme.of(context).textTheme.bodyMedium),
+        ],
+      )),
+      IconButton(
+        tooltip: '复制',
+        onPressed: value.isEmpty ? null : () => Clipboard.setData(ClipboardData(text: value)),
+        icon: const Icon(Icons.copy_outlined, size: 18),
+      ),
+    ],
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final addresses = _addresses.map((address) => '$address:21118').join('\n');
+    return Container(
+      margin: const EdgeInsets.only(top: 12, bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('局域网直连', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 4),
+          const Text('无需配置服务器。控制端输入以下地址和密码，并核对设备指纹。'),
+          const SizedBox(height: 8),
+          _copyable('本机局域网地址', addresses.isEmpty ? '未检测到可用的私有 IPv4 地址' : addresses),
+          _copyable('设备指纹（SHA-256）',
+            _fingerprint.isEmpty ? '共享服务启动后生成' : _fingerprint),
+          const Text('首次连接必须核对完整指纹；只在可信的局域网内开放 21118/TCP 和 21119/UDP。'),
+        ],
+      ),
     );
   }
 }
@@ -287,6 +704,7 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
     super.initState();
     gFFI.serverModel.checkAndroidPermission();
     mobile.checkService();
+    gFFI.serverModel.fetchID();
     _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       gFFI.serverModel.fetchID();
     });
@@ -307,9 +725,24 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
           children: [
             AnimatedBuilder(
               animation: gFFI.serverModel,
-              builder: (_, __) => gFFI.serverModel.isStart
-                  ? mobile.ServerInfo()
-                  : mobile.ServiceNotRunningNotification(),
+              builder: (context, _) {
+                final model = gFFI.serverModel;
+                return Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _connectionValue(context, '本机连接码（服务器连接）', model.serverId.text),
+                      const _LanConnectionInfo(),
+                      _connectionValue(context, '连接密码', model.serverPasswd.text,
+                        refresh: model.isStart
+                            ? () => bind.mainUpdateTemporaryPassword()
+                            : null),
+                      if (!model.isStart) mobile.ServiceNotRunningNotification(),
+                    ],
+                  ),
+                );
+              },
             ),
             AnimatedBuilder(
               animation: gFFI.serverModel,
@@ -566,10 +999,8 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
     try {
       if (value) {
         if (bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword ||
-            !validServer(bind.mainGetOptionSync(key: 'custom-rendezvous-server')) ||
-            !validPublicKey(bind.mainGetOptionSync(key: 'key')) ||
             await bind.mainGetCommon(key: 'permanent-password-set') != 'true') {
-          if (mounted) setState(() => _error = '请先配置私服和固定连接密码');
+          if (mounted) setState(() => _error = '请先设置固定连接密码');
           return;
         }
         final installed = Platform.isWindows
