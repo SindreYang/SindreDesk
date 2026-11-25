@@ -138,24 +138,22 @@ def patch_client(text):
         // Serverless LAN connections are private-IPv4 only. The user must compare
         // the host's SHA-256 signing-key fingerprint before the encrypted handshake.
         if hbb_common::is_ip_str(peer) || peer.parse::<SocketAddr>().is_ok() {
-            let address = if hbb_common::is_ip_str(peer) {
+            // Keep the destination as a resolved SocketAddr: the socket API
+            // accepts this type directly and SocketAddr::port() returns u16.
+            const LAN_DIRECT_PORT: u16 = (RELAY_PORT + 1) as u16;
+            let address: SocketAddr = if hbb_common::is_ip_str(peer) {
                 let ip: std::net::Ipv4Addr = peer
                     .parse()
                     .map_err(|_| anyhow!("LAN direct access requires IPv4"))?;
-                if !ip.is_private() {
-                    bail!("LAN direct access is limited to private IPv4 addresses");
-                }
-                check_port(peer, RELAY_PORT + 1)
+                SocketAddr::new(IpAddr::V4(ip), LAN_DIRECT_PORT)
             } else {
-                let address: SocketAddr = peer
-                    .parse()
-                    .map_err(|_| anyhow!("LAN direct access requires an IPv4 address and port"))?;
-                match address.ip() {
-                    IpAddr::V4(ip) if ip.is_private() && address.port() == RELAY_PORT + 1 => {}
-                    _ => bail!("LAN direct access requires private IPv4 and port {}", RELAY_PORT + 1),
-                }
-                peer.to_owned()
+                peer.parse()
+                    .map_err(|_| anyhow!("LAN direct access requires an IPv4 address and port"))?
             };
+            match address.ip() {
+                IpAddr::V4(ip) if ip.is_private() && address.port() == LAN_DIRECT_PORT => {}
+                _ => bail!("LAN direct access requires private IPv4 and port {}", LAN_DIRECT_PORT),
+            }
             let option = format!("sindre-lan-peer-fingerprint:{}", peer);
             let expected_fingerprint = Config::get_option(&option);
             if expected_fingerprint.len() != 64
@@ -163,7 +161,7 @@ def patch_client(text):
             {
                 bail!("Enter the 64-character device fingerprint shown on the Host");
             }
-            let mut conn = connect_tcp_local(&address, None, CONNECT_TIMEOUT).await?;
+            let mut conn = connect_tcp_local(address, None, CONNECT_TIMEOUT).await?;
             let bytes = timeout(READ_TIMEOUT, conn.next())
                 .await?
                 .ok_or_else(|| anyhow!("LAN host closed before identity exchange"))??;
