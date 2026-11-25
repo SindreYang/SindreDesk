@@ -72,6 +72,15 @@ class PrepareClientTests(unittest.TestCase):
         unit = (ROOT / "deploy/sindredesk-host.service").read_text()
         self.assertIn("ExecStart=/usr/lib/sindredesk-host/sindredesk-host --service", unit)
 
+    def test_compact_desktop_home(self):
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("if (isDesktop) return _desktopHome(context);", ui)
+        self.assertIn("FilteringTextInputFormatter.digitsOnly", ui)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("TitleBarStyle.normal", source)
+        self.assertIn("const Size(440, 440)", source)
+        self.assertIn("const Size(480, 540)", source)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])

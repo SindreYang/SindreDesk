@@ -49,6 +49,7 @@ class _SindreHomeState extends State<SindreHome> {
   final _password = TextEditingController();
   Timer? _timer;
   bool _busy = false;
+  bool _showPassword = false;
   String _message = '';
   bool? _reachable;
   int _probeGeneration = 0;
@@ -179,7 +180,7 @@ class _SindreHomeState extends State<SindreHome> {
     ]);
   }
 
-  Widget _serverStatus() => AnimatedBuilder(
+  Widget _serverStatus({bool compact = false}) => AnimatedBuilder(
     animation: gFFI.serverModel,
     builder: (context, _) {
       final status = gFFI.serverModel.connectStatus;
@@ -193,11 +194,11 @@ class _SindreHomeState extends State<SindreHome> {
           !configured ? Theme.of(context).colorScheme.outline :
           failed ? Theme.of(context).colorScheme.error : Colors.orange;
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 20, vertical: compact ? 6 : 10),
         child: Row(children: [
           Icon(Icons.circle, size: 10, color: color),
           const SizedBox(width: 8),
-          Expanded(child: Text(label)),
+          Expanded(child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
         ]),
       );
     },
@@ -242,8 +243,129 @@ class _SindreHomeState extends State<SindreHome> {
     ],
   );
 
+  Widget _desktopClient() {
+    final colors = Theme.of(context).colorScheme;
+    final border = OutlineInputBorder(borderRadius: BorderRadius.circular(8));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('连接码', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _id,
+          keyboardType: TextInputType.number,
+          textInputAction: TextInputAction.next,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: InputDecoration(
+            hintText: '输入对方设备连接码',
+            isDense: true,
+            prefixIcon: const Icon(Icons.computer_outlined, size: 20),
+            border: border,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text('连接密码', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _password,
+          obscureText: !_showPassword,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _connect(),
+          decoration: InputDecoration(
+            hintText: '输入对方设备密码',
+            isDense: true,
+            prefixIcon: const Icon(Icons.lock_outline, size: 20),
+            suffixIcon: IconButton(
+              tooltip: _showPassword ? '隐藏密码' : '显示密码',
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+              icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
+            ),
+            border: border,
+          ),
+        ),
+        const SizedBox(height: 18),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF1769D2),
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(42),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          onPressed: _busy ? null : _connect,
+          child: Text(_busy ? '连接中…' : '连接'),
+        ),
+        if (_message.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(top: 10),
+            child: Text(_message, style: TextStyle(color: colors.error))),
+      ],
+    );
+  }
+
+  Widget _desktopHome(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final background = theme.brightness == Brightness.dark
+        ? const Color(0xFF17191D) : const Color(0xFFF4F6F9);
+    final surface = theme.brightness == Brightness.dark
+        ? const Color(0xFF21242A) : Colors.white;
+    return Scaffold(
+      backgroundColor: background,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(host ? '本机设备' : '远程连接',
+                          style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(host ? '允许其他设备连接本机' : '输入被控设备的连接信息',
+                          style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
+                      ],
+                    )),
+                    IconButton(
+                      tooltip: '服务器设置',
+                      onPressed: _settings,
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                  ]),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: colors.outlineVariant),
+                    ),
+                    child: host ? _hostDesktop() : _desktopClient(),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: _serverStatus(compact: true)),
+                    if (!configured)
+                      TextButton(onPressed: _settings, child: const Text('配置服务器')),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (isDesktop) return _desktopHome(context);
     // Android 被控复用原生权限检查、共享授权和会话断开组件。
     return Scaffold(
       appBar: AppBar(

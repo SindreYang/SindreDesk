@@ -223,3 +223,7 @@ Windows：先配置私服、生成固定密码，再开启系统级自启。便�
 Linux（systemd 桌面环境）：管理员从可信 Release 解压完整 Host 运行目录，然后将完整目录安装至 /usr/lib/sindredesk-host，并保证目录及文件 root 所有且普通用户不可写；将 Host 发布包中 sindredesk-host.service 安装至 /etc/systemd/system/，执行 sudo systemctl daemon-reload。以普通用户启动 /usr/lib/sindredesk-host/sindredesk-host，配置私服并设置密码，再开启系统级自启。不要以 root 启动 GUI。原生服务同步配置后启用系统服务。关闭开关使用原生停止/卸载服务入口。
 
 注意：为匹配实际进程和服务名称，桌面 Host 的原生应用标识调整为 Windows SindreDeskHost、Linux sindredesk-host。升级时尝试迁移当前系统账户的两份旧 Host 配置；保留旧文件，不覆盖已存在的新配置。迁移失败时保留原配置路径供读取。升级前建议备份，升级后核对连接码及私服配置；实际迁移仍需真机验证。新版本重启后的 ID、密码和配置保持情况需要真实设备验证。Linux X11、Wayland 和登录管理器的登录前控制能力存在差异。六位密码应仅在可信私服和受限网络内使用。
+
+### 桌面首页
+
+Client 默认 440×440、Host 默认 480×540（逻辑像素），采用系统原生标题栏和紧凑首页；保留最小窗口限制和缩放，设置、连接信息与服务器状态集中展示。Android 和远程会话窗口不改变布局。旧首页窗口大小不再恢复。

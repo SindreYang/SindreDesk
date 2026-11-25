@@ -176,6 +176,23 @@ def patch_main(text):
     text = text.replace('  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);\n', '')
     text = replace_once(text, '  if (startService) {', '  if (startService && !bind.isOutgoingOnly()) {')
     text = replace_once(text, ': HomePage(),', ': const SindreHome(),')
+    text = replace_once(text,
+        '''  WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
+      isMainWindow: true, alwaysOnTop: alwaysOnTop);''',
+        '''  final host = bind.isIncomingOnly();
+  final windowOptions = WindowOptions(
+    size: host ? const Size(480, 540) : const Size(440, 440),
+    minimumSize: const Size(360, 320),
+    center: true,
+    alwaysOnTop: alwaysOnTop,
+    titleBarStyle: TitleBarStyle.normal,
+    title: host ? 'SindreDesk Host' : 'SindreDesk Client',
+  );''')
+    text = replace_once(text, '    await restoreWindowPosition(WindowType.Main);',
+        '    // Compact main window: do not restore obsolete oversized bounds.\n    await windowManager.center();')
+    text = replace_once(text, '    windowManager.setTitle(getWindowName());',
+        "    windowManager.setTitle(host ? 'SindreDesk Host' : 'SindreDesk Client');")
+    text = replace_once(text, '    setResizable(!bind.isIncomingOnly());', '    setResizable(true);')
     return text
 
 
@@ -183,6 +200,8 @@ def patch_desktop_tab(text):
     text = "import '../../sindre/sindre_home.dart';\n" + text
     text = replace_once(text, 'page: DesktopHomePage(', 'page: const SindreHome(')
     text = replace_once(text, 'offstage: bind.isIncomingOnly() || bind.isDisableSettings(),', 'offstage: true,')
+    text = replace_once(text, 'windowManager.setSize(getIncomingOnlyHomeSize());\n          setResizable(false);',
+        'windowManager.setSize(const Size(480, 540));\n          setResizable(true);')
     return text
 
 
@@ -284,6 +303,11 @@ def prepare(source, role):
         '''        // 不启动上游未加密直接 IP 监听。'''))
     patch(source / "flutter/lib/main.dart", patch_main)
     patch(source / "flutter/lib/desktop/pages/desktop_tab_page.dart", patch_desktop_tab)
+    # Main window uses the OS title bar; keep native remote/CM tab behavior.
+    patch(source / "flutter/lib/desktop/widgets/tabbar_widget.dart", lambda s: replace_once(s,
+        'if (stateGlobal.showTabBar.isTrue &&',
+        'if (stateGlobal.showTabBar.isTrue &&\n            !(tabType == DesktopTabType.main && isHideSingleItem()) &&'))
+
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
     patch_desktop_branding(source, role)
     dest = source / "flutter/lib/sindre"
