@@ -437,7 +437,7 @@ class _SindreHomeState extends State<SindreHome> {
           keyboardType: TextInputType.text,
           textInputAction: TextInputAction.next,
           inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.:]'))],
-          onChanged: (_) => setState(() {}),
+          onChanged: _onIdChanged,
           decoration: InputDecoration(
             hintText: '连接码或 192.168.1.20:21118',
             isDense: true,
