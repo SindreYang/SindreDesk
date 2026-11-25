@@ -276,6 +276,8 @@ def patch_client(text):
                     err
                 })?;
             crate::sindre_diag::record("lan-tcp-connected", Some(address), None);
+            let mut identity_rejected = false;
+            let attempt: ResultType<(Stream, Vec<u8>)> = async {
             let bytes = timeout(READ_TIMEOUT, conn.next())
                 .await.map_err(|err| {
                     crate::sindre_diag::record("lan-identity-timeout", Some(address), None);
@@ -311,7 +313,10 @@ def patch_client(text):
                 }
             };
             let host_key = host_sign_pk.0.to_vec();
-            crate::sindre_trust::check(peer, &host_key)?;
+            if let Err(err) = crate::sindre_trust::check(peer, &host_key) {
+                identity_rejected = true;
+                return Err(err);
+            }
             crate::sindre_diag::record("lan-identity-checked", Some(address), None);
             Self::secure_connection(peer, Vec::new(), "", &mut conn, Some(host_sign_pk)).await
                 .map_err(|err| {
@@ -322,7 +327,23 @@ def patch_client(text):
                 bail!("LAN connection did not establish encryption");
             }
             crate::sindre_diag::record("lan-encryption-ready", Some(address), None);
-            return Ok(((conn, true, Some(host_key), None, "TCP"), (0, "".to_owned()), false));
+            Ok((conn, host_key))
+            }.await;
+            match attempt {
+                Ok((conn, host_key)) => {
+                    return Ok(((conn, true, Some(host_key), None, "TCP"), (0, "".to_owned()), false));
+                }
+                Err(err) if identity_rejected || !crate::sindre_lan_compat::enabled() => return Err(err),
+                Err(_) => {
+                    crate::sindre_diag::record("lan-plain-fallback-start", Some(address), None);
+                    // New TCP connection: never reuse a partially encrypted stream.
+                    let mut plain = connect_tcp_local(address, None, CONNECT_TIMEOUT).await?;
+                    crate::sindre_lan_compat::send_request(&mut plain).await?;
+                    crate::sindre_lan_compat::receive_ack(&mut plain).await?;
+                    crate::sindre_diag::record("lan-plain-fallback-ready", Some(address), None);
+                    return Ok(((plain, true, None, None, "TCP"), (0, "".to_owned()), false));
+                }
+            }
         }
         if Config::get_option("custom-rendezvous-server").trim().is_empty()
             || key.is_empty()
@@ -425,6 +446,20 @@ def patch_rendezvous_mediator(text):
                 });''',
         '''                tokio::spawn(async move {
                     let mut stream = hbb_common::Stream::from(stream, local_addr);
+                    if crate::sindre_lan_compat::enabled() {
+                        match hbb_common::timeout(1000, stream.next()).await {
+                            Ok(Some(Ok(bytes))) if crate::sindre_lan_compat::is_request(&bytes) => {
+                                allow_err!(crate::server::create_plain_lan_connection(server, stream, addr).await);
+                                return;
+                            }
+                            // Normal encrypted clients wait for the server identity first.
+                            Err(_) => {}
+                            _ => {
+                                crate::sindre_diag::record("lan-mode-request-invalid", Some(addr), None);
+                                return;
+                            }
+                        }
+                    }
                     let (_, host_signing_pk) = Config::get_key_pair();
                     let mut identity = hbb_common::message_proto::Message::new();
                     identity.set_public_key(hbb_common::message_proto::PublicKey {
@@ -802,6 +837,31 @@ def patch_lan_trust_ffi(text):
     }''')
 
 
+def patch_plain_lan_server(text):
+    return replace_once(text, 'pub async fn create_tcp_connection(',
+        '''// Only called by the dedicated private-IPv4 LAN listener after an explicit
+// compatibility request. The normal rendezvous path still requires encryption.
+pub(crate) async fn create_plain_lan_connection(
+    server: ServerPtr,
+    mut stream: Stream,
+    addr: SocketAddr,
+) -> ResultType<()> {
+    if !hbb_common::config::is_incoming_only()
+        || !crate::sindre_lan_compat::enabled()
+        || !crate::sindre_lan_compat::private_address(addr)
+    {
+        bail!("LAN compatibility mode is disabled");
+    }
+    crate::sindre_lan_compat::send_ack(&mut stream).await?;
+    crate::sindre_diag::record("lan-plain-host-session", Some(addr), None);
+    let id = server.write().unwrap().get_new_id();
+    Connection::start(addr, stream, id, Arc::downgrade(&server), ConnectionMeta::default()).await;
+    Ok(())
+}
+
+pub async fn create_tcp_connection(''')
+
+
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
@@ -856,6 +916,8 @@ def prepare(source, role):
         bail!("Incoming connections require Host role and encryption");
     }
     Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;'''))
+    patch(source / "src/server.rs", patch_plain_lan_server)
+    shutil.copy2(ROOT / "client/native/sindre_lan_compat.rs", source / "src/sindre_lan_compat.rs")
     patch(source / "src/rendezvous_mediator.rs", patch_rendezvous_mediator)
     patch(source / "src/rendezvous_mediator.rs", patch_lan_status)
     patch(source / "src/lan.rs", patch_lan)
@@ -864,7 +926,7 @@ def prepare(source, role):
         patch(source / "src/ipc.rs", patch_lan_status_ipc)
         patch(source / "src/flutter_ffi.rs", patch_lan_status_ffi)
     shutil.copy2(ROOT / "client/native/sindre_diag.rs", source / "src/sindre_diag.rs")
-    patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;\nmod sindre_trust;'))
+    patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;\nmod sindre_trust;\nmod sindre_lan_compat;'))
     patch(source / "src/core_main.rs", lambda s: replace_once(s, '    hbb_common::init_log(false, &log_name);',
         '    hbb_common::init_log(false, &log_name);\n    crate::sindre_diag::record("desktop-start", None, None);'))
     patch(source / "src/server/connection.rs", lambda s: replace_once(

@@ -37,3 +37,5 @@ SindreDeskHost.exe、SindreDeskClient.exe、SindreDeskHost.AppImage、SindreDesk
 - [ ] Windows 锁屏/UAC、Linux X11/Wayland。
 - [ ] Linux 服务端实际双进程启动、端口、公钥持久化、退出和重启、错误恢复。
 - [ ] 许可证、对应源码与可重复构建。
+
+局域网测试兼容模式默认关闭，需两端显式开启。仅专用私有 IPv4 直连监听接受兼容模式请求；加密握手失败后新建一次 TCP 连接并确认兼容模式，原生固定密码认证不变。跨网及中继保持强制加密。非加密数据无机密性和完整性保障。

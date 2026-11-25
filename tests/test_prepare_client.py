@@ -267,6 +267,19 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("if let Some(key) = self.sindre_lan_key.take()", result)
         self.assertIn("sindre_trust::remember", result)
 
+    def test_lan_compatibility_fallback(self):
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        compat = (ROOT / "client/native/sindre_lan_compat.rs").read_text()
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn('Config::get_option("sindre-lan-compat") == "Y"', compat)
+        self.assertIn("identity_rejected || !crate::sindre_lan_compat::enabled()", source)
+        self.assertIn("create_plain_lan_connection", source)
+        self.assertIn("private_address(addr)", source)
+        self.assertIn("Incoming connections require Host role and encryption", source)
+        self.assertIn("receive_ack(&mut plain)", source)
+        self.assertIn("lan-plain-fallback-ready", source)
+        self.assertIn("局域网兼容模式", ui)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])
