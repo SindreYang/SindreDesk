@@ -37,6 +37,25 @@ bool validServer(String value) {
   return !RegExp(r'(^|\.)rustdesk\.com$', caseSensitive: false).hasMatch(host);
 }
 
+Widget _connectionValue(BuildContext context, String title, String value, {VoidCallback? refresh}) {
+  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(title, style: Theme.of(context).textTheme.labelLarge),
+    Row(children: [
+      Expanded(child: SelectableText(value,
+        style: Theme.of(context).textTheme.headlineSmall)),
+      IconButton(
+        tooltip: '复制',
+        onPressed: () => Clipboard.setData(ClipboardData(text: value)),
+        icon: const Icon(Icons.copy_outlined),
+      ),
+      if (refresh != null)
+        IconButton(tooltip: '刷新密码', onPressed: refresh,
+          icon: const Icon(Icons.refresh)),
+    ]),
+    const SizedBox(height: 12),
+  ]);
+}
+
 class SindreHome extends StatefulWidget {
   const SindreHome({super.key});
 
@@ -161,32 +180,14 @@ class _SindreHomeState extends State<SindreHome> {
     }
   }
 
-  Widget _value(String title, String value, {VoidCallback? refresh}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: Theme.of(context).textTheme.labelLarge),
-      Row(children: [
-        Expanded(child: SelectableText(value,
-          style: Theme.of(context).textTheme.headlineSmall)),
-        IconButton(
-          tooltip: '复制',
-          onPressed: () => Clipboard.setData(ClipboardData(text: value)),
-          icon: const Icon(Icons.copy_outlined),
-        ),
-        if (refresh != null)
-          IconButton(tooltip: '刷新密码', onPressed: refresh,
-            icon: const Icon(Icons.refresh)),
-      ]),
-      const SizedBox(height: 12),
-    ]);
-  }
-
   Widget _serverStatus({bool compact = false}) => AnimatedBuilder(
     animation: gFFI.serverModel,
     builder: (context, _) {
       final status = gFFI.serverModel.connectStatus;
       final ready = configured && (host ? status > 0 : _reachable == true);
       final failed = host ? status < 0 : _reachable == false;
-      final label = !configured ? '未配置服务器' :
+      final label = !configured
+          ? (host ? '未配置服务器（连接码暂不可用）' : '未配置服务器') :
           ready ? (host ? '服务器已连接' : '服务器可达') :
           failed ? (host ? '服务器未就绪' : '服务器不可达') :
           host ? '正在连接服务器' : '正在检测服务器';
@@ -211,11 +212,11 @@ class _SindreHomeState extends State<SindreHome> {
       builder: (_, __) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _value('本机连接码', model.serverId.text),
+          _connectionValue(context, '本机连接码', model.serverId.text),
           if (DesktopAutostart.supported)
             const _FixedPasswordPanel()
           else
-            _value('连接密码', model.serverPasswd.text,
+            _connectionValue(context, '连接密码', model.serverPasswd.text,
               refresh: () => bind.mainUpdateTemporaryPassword()),
           const Text('远程会话可在连接管理窗口中断开。'),
           if (DesktopAutostart.supported) const _DesktopAutostartSwitch(),
@@ -378,9 +379,7 @@ class _SindreHomeState extends State<SindreHome> {
       ),
       bottomNavigationBar: SafeArea(child: _serverStatus()),
       body: host && isAndroid
-          ? configured
-              ? const _AndroidHostPanel()
-              : const Center(child: Text('请先配置服务器地址和公钥'))
+          ? const _AndroidHostPanel()
           : Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
@@ -409,6 +408,7 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
     super.initState();
     gFFI.serverModel.checkAndroidPermission();
     mobile.checkService();
+    gFFI.serverModel.fetchID();
     _timer = Timer.periodic(const Duration(seconds: 3), (_) {
       gFFI.serverModel.fetchID();
     });
@@ -429,9 +429,23 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
           children: [
             AnimatedBuilder(
               animation: gFFI.serverModel,
-              builder: (_, __) => gFFI.serverModel.isStart
-                  ? mobile.ServerInfo()
-                  : mobile.ServiceNotRunningNotification(),
+              builder: (context, _) {
+                final model = gFFI.serverModel;
+                return Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _connectionValue(context, '本机连接码', model.serverId.text),
+                      _connectionValue(context, '连接密码', model.serverPasswd.text,
+                        refresh: model.isStart
+                            ? () => bind.mainUpdateTemporaryPassword()
+                            : null),
+                      if (!model.isStart) mobile.ServiceNotRunningNotification(),
+                    ],
+                  ),
+                );
+              },
             ),
             AnimatedBuilder(
               animation: gFFI.serverModel,

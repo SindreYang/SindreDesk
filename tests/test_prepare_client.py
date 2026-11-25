@@ -81,6 +81,19 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("const Size(440, 440)", source)
         self.assertIn("const Size(480, 540)", source)
 
+    def test_host_info_independent_of_server(self):
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("body: host && isAndroid\n          ? const _AndroidHostPanel()", ui)
+        android = ui.split("class _AndroidHostPanelState", 1)[1].split("class _ServerSettings", 1)[0]
+        self.assertNotIn("configured", android)
+        self.assertIn("gFFI.serverModel.fetchID();", android)
+        self.assertIn("'本机连接码', model.serverId.text", android)
+        self.assertIn("'连接密码', model.serverPasswd.text", android)
+        self.assertIn("if (!model.isStart) mobile.ServiceNotRunningNotification()", android)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn('Secure offline LAN mode is not available', source)
+        self.assertIn('Incoming connections require Host role and encryption', source)
+
     def test_desktop_icon_format(self):
         import struct
         png, ico = module.desktop_icon_files()
