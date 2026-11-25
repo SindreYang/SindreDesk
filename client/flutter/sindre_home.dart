@@ -166,49 +166,141 @@ class _SindreHomeState extends State<SindreHome> {
     }
   }
 
+  void _scanLan() {
+    if (!mounted || host) return;
+    bind.mainLoadLanPeers();
+    bind.mainDiscover();
+  }
+
+  Future<void> _selectLanPeer(Peer peer) async {
+    if (peer.ip.isEmpty || !validFingerprint(peer.fingerprint)) return;
+    final address = '${peer.ip}:21118';
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('核对局域网设备'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
+            const SizedBox(height: 8),
+            SelectableText(address),
+            const SizedBox(height: 8),
+            const Text('请与被控端屏幕显示的设备指纹逐字符核对。指纹不一致时不要继续。'),
+            const SizedBox(height: 8),
+            SelectableText(peer.fingerprint),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true),
+            child: const Text('已核对，使用此设备')),
+        ],
+      ),
+    );
+    if (accepted == true && mounted) {
+      setState(() {
+        _id.text = address;
+        _fingerprint.text = peer.fingerprint;
+        _message = '';
+      });
+    }
+  }
+
   Future<void> _connect() async {
     if (_busy) return;
     final id = _id.text.replaceAll(' ', '').trim();
     final password = _password.text;
-    if (!configured) {
-      setState(() => _message = '请先配置服务器地址和公钥');
-      return;
+    final direct = _isPrivateLanAddress(id);
+    if (direct) {
+      final fingerprint = _fingerprint.text
+          .replaceAll(RegExp(r'[:\s]'), '')
+          .trim()
+          .toLowerCase();
+      if (!validFingerprint(fingerprint)) {
+        setState(() => _message = '请填写并核对被控端显示的 64 位设备指纹');
+        return;
+      }
+      await bind.mainSetOption(
+        key: 'sindre-lan-peer-fingerprint:${id}',
+        value: fingerprint,
+      );
+    } else {
+      if (!RegExp(r'^[0-9]+$').hasMatch(id)) {
+        setState(() => _message = '请输入连接码或局域网 IPv4 地址');
+        return;
+      }
+      if (!configured) {
+        setState(() => _message = '连接码需要配置私有服务器；局域网可直接使用 IP 地址');
+        return;
+      }
     }
-    // 只开放连接码；安全离线局域网协议尚未完成。
-    if (!RegExp(r'^[0-9]+$').hasMatch(id) || password.isEmpty) {
-      setState(() => _message = '请输入连接码和密码');
+    if (password.isEmpty) {
+      setState(() => _message = '请输入连接密码');
       return;
     }
     setState(() { _busy = true; _message = ''; });
     _password.clear();
     try {
       await connect(context, id, password: password);
-    } catch (_) {
-      if (mounted) setState(() => _message = '无法发起连接，请检查配置');
+    } catch (error) {
+      if (mounted) setState(() => _message = '连接失败：${error.toString()}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Widget _value(String title, String value, {VoidCallback? refresh}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: Theme.of(context).textTheme.labelLarge),
+  Widget _lanDiscoveryPanel() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
       Row(children: [
-        Expanded(child: SelectableText(value,
-          style: Theme.of(context).textTheme.headlineSmall)),
-        IconButton(
-          tooltip: '复制',
-          onPressed: () => Clipboard.setData(ClipboardData(text: value)),
-          icon: const Icon(Icons.copy_outlined),
+        Expanded(child: Text('局域网设备', style: Theme.of(context).textTheme.titleSmall)),
+        TextButton.icon(
+          onPressed: _scanLan,
+          icon: const Icon(Icons.refresh, size: 16),
+          label: const Text('扫描'),
         ),
-        if (refresh != null)
-          IconButton(tooltip: '刷新密码', onPressed: refresh,
-            icon: const Icon(Icons.refresh)),
       ]),
-      const SizedBox(height: 12),
-    ]);
-  }
-
+      AnimatedBuilder(
+        animation: gFFI.lanPeersModel,
+        builder: (context, _) {
+          final peers = gFFI.lanPeersModel.peers
+              .where((peer) => peer.ip.isNotEmpty)
+              .take(8)
+              .toList();
+          if (peers.isEmpty) {
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('尚未发现设备。请确认两端处于同一局域网，并允许 UDP 21119。'),
+            );
+          }
+          return Column(children: [
+            for (final peer in peers)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
+                subtitle: Text(
+                  '${peer.ip}:21118\n${validFingerprint(peer.fingerprint) ? peer.fingerprint : '此设备不支持安全直连'}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: TextButton(
+                  onPressed: validFingerprint(peer.fingerprint)
+                      ? () => _selectLanPeer(peer)
+                      : null,
+                  child: const Text('使用'),
+                ),
+              ),
+          ]);
+        },
+      ),
+      const SizedBox(height: 8),
+    ],
+  );
   Widget _serverStatus({bool compact = false}) => AnimatedBuilder(
     animation: gFFI.serverModel,
     builder: (context, _) {
