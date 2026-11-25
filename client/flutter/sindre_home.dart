@@ -723,7 +723,6 @@ class _AndroidHostPanelState extends State<_AndroidHostPanel> {
       child: SingleChildScrollView(
         child: Column(
           children: [
-            const _LanConnectionInfo(),
             AnimatedBuilder(
               animation: gFFI.serverModel,
               builder: (context, _) {
