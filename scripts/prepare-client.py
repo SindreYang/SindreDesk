@@ -205,6 +205,9 @@ def patch_client(text):
         '        let res = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn).await;',
         '        let res = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn, None).await;')
     text = replace_once(text,
+        '                            Self::secure_connection(&peer, signed_id_pk, &key, &mut conn).await?;',
+        '                            Self::secure_connection(&peer, signed_id_pk, &key, &mut conn, None).await?;')
+    text = replace_once(text,
         '''        key: &str,
         conn: &mut Stream,
     ) -> ResultType<Option<Vec<u8>>> {
