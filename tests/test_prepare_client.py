@@ -141,6 +141,8 @@ class PrepareClientTests(unittest.TestCase):
         source = (ROOT / "scripts/prepare-client.py").read_text()
         self.assertIn("sindre-lan-peer-fingerprint", source)
         self.assertIn("Some(host_sign_pk)", source)
+        self.assertIn("peer.parse::<SocketAddr>().is_ok()", source)
+        self.assertIn("peer_id.parse::<SocketAddr>().is_ok()", source)
         self.assertIn("host_signing_pk.into()", source)
         self.assertIn("IpAddr::V4(ip) if ip.is_private()", source)
         self.assertIn("Config::set_option(OPTION_DIRECT_SERVER.to_owned(),", source)

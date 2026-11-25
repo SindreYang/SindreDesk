@@ -137,7 +137,7 @@ def patch_client(text):
         }
         // Serverless LAN connections are private-IPv4 only. The user must compare
         // the host's SHA-256 signing-key fingerprint before the encrypted handshake.
-        if hbb_common::is_ip_str(peer) || hbb_common::is_domain_port_str(peer) {
+        if hbb_common::is_ip_str(peer) || peer.parse::<SocketAddr>().is_ok() {
             let address = if hbb_common::is_ip_str(peer) {
                 let ip: std::net::Ipv4Addr = peer
                     .parse()
@@ -225,7 +225,7 @@ def patch_client(text):
         '''                        if let Ok((id, their_pk_b)) = decode_id_pk(&si.id, &sign_pk) {
                             if id == peer_id
                                 || hbb_common::is_ip_str(peer_id)
-                                || hbb_common::is_domain_port_str(peer_id)
+                                || peer_id.parse::<SocketAddr>().is_ok()
                             {''')
     text = replace_once(text,
         '        let other_server = interface.get_lch().read().unwrap().other_server.clone();',
