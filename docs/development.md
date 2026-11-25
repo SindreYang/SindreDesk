@@ -13,8 +13,8 @@
 | --- | --- |
 | SindreDesk-host-android-arm64-ci | SindreDeskHost.apk |
 | SindreDesk-client-android-arm64-ci | SindreDeskClient.apk |
-| SindreDesk-host-windows-x64-ci | Windows Host 单文件 EXE |
-| SindreDesk-client-windows-x64-ci | Windows Client 单文件 EXE |
+| SindreDesk-host-windows-x64-ci | Windows Host 完整运行目录 |
+| SindreDesk-client-windows-x64-ci | Windows Client 完整运行目录 |
 | SindreDesk-host-linux-x64-ci | Linux Host 完整运行目录 |
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
@@ -60,6 +60,6 @@ bash scripts/test-server-integration.sh
 
 ## Windows 便携版与诊断
 
-复用上游 portable packer，Host/Client 按独立目录和嵌入载荷摘要隔离。打包前检查原始运行目录，打包后验证 EXE 非空；运行时核对每个解包文件的完整性。该方案不是完全静态链接。系统级安装仍使用原生安装入口，不从便携缓存注册高权限服务。
+Windows 保留原有 ZIP 发布方式，包含完整 EXE、DLL 和 Flutter 运行资源；不使用自解包启动器。系统级安装继续使用原生安装入口。
 
 局域网 TCP 32118、UDP 32119 独立于原版 RustDesk；服务器端口不变。诊断文件按角色记录固定事件、时间、进程号、端口和连接地址，单文件约 5 MiB 轮换。不会写入密码、私钥、指纹或协议正文。

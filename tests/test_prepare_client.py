@@ -215,7 +215,7 @@ class PrepareClientTests(unittest.TestCase):
             self.assertLessEqual(offset + size, len(ico))
         self.assertEqual(ico[-len(png):], png)
 
-    def test_isolated_lan_and_portable(self):
+    def test_isolated_lan_and_diagnostics(self):
         self.assertEqual(module.LAN_DIRECT_PORT, 32118)
         self.assertEqual(module.LAN_DISCOVERY_PORT, 32119)
         self.assertIn("SINDRE_LAN_DISCOVERY_PORT", module.patch_lan_ports(
@@ -227,17 +227,19 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("sindre_lan_status", source)
         self.assertIn("lan-tcp-bind-failed", source)
         self.assertIn("lan-invalid-host-identity", source)
-        self.assertIn("md5::compute(include_bytes!", source)
-        self.assertIn("file.write_to_file(&dir).is_err()", source)
         log = (ROOT / "client/native/sindre_diag.rs").read_text()
-        self.assertIn("SINDRE_LOG_DIR", log)
         self.assertIn("OpenOptions", log)
         workflow = (ROOT / ".github/workflows/client-build-verify.yml").read_text()
-        self.assertIn("python generate.py", workflow)
-        self.assertIn("--sindre-verify-package", workflow)
         self.assertIn("session-login-rejected", source)
         self.assertIn("lan-identity-timeout", source)
-        self.assertIn("sha256sum *.apk *.exe *.tar.gz", workflow)
+        self.assertIn("sha256sum *.apk *.zip *.tar.gz", workflow)
+        self.assertIn("--skip-portable-pack", workflow)
+        self.assertIn("runner/Release/", workflow)
+        self.assertIn("zip -qr", workflow)
+        self.assertNotIn("python generate.py", workflow)
+        self.assertNotIn("patch_windows_portable", source)
+        self.assertIn("std::env::current_exe()", log)
+        self.assertIn("Config::log_path()", log)
 
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
