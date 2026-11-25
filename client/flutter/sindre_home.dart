@@ -495,6 +495,10 @@ class _FixedPasswordPanelState extends State<_FixedPasswordPanel> {
       final ok = await bind.mainSetPermanentPasswordWithResult(password: password);
       if (!ok) throw StateError('Password update failed');
       await gFFI.serverModel.setVerificationMethod(kUsePermanentPassword);
+      if (gFFI.serverModel.verificationMethod != kUsePermanentPassword &&
+          bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword) {
+        throw StateError('Permanent verification mode unavailable');
+      }
       await _read();
       if (mounted && _ready != true) throw StateError('Password state unavailable');
     } catch (_) {
@@ -562,7 +566,8 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
     setState(() { _busy = true; _error = null; });
     try {
       if (value) {
-        if (!validServer(bind.mainGetOptionSync(key: 'custom-rendezvous-server')) ||
+        if (bind.mainGetOptionSync(key: 'verification-method') != kUsePermanentPassword ||
+            !validServer(bind.mainGetOptionSync(key: 'custom-rendezvous-server')) ||
             !validPublicKey(bind.mainGetOptionSync(key: 'key')) ||
             await bind.mainGetCommon(key: 'permanent-password-set') != 'true') {
           if (mounted) setState(() => _error = '请先配置私服和固定连接密码');

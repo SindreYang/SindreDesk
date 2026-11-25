@@ -48,6 +48,16 @@ class PrepareClientTests(unittest.TestCase):
         self.assertEqual(signing.escape("中"), r"\u4e2d")
         self.assertEqual(signing.escape("😀"), r"\ud83d\ude00")
 
+    def test_legacy_host_config_patch(self):
+        source = "        Config::with_extension(Self::path(name))"
+        result = module.patch_legacy_host_config(source)
+        self.assertIn('ProjectDirs::from("", "", "SindreDesk Host")', result)
+        self.assertIn("create_new(true)", result)
+        self.assertIn("std::fs::hard_link(&tmp, &path)", result)
+        self.assertIn("return legacy;", result)
+        with self.assertRaises(RuntimeError):
+            module.patch_legacy_host_config("")
+
     def test_desktop_service_scope(self):
         source = (ROOT / "client/flutter/desktop_autostart.dart").read_text()
         self.assertIn("--install-service", source)

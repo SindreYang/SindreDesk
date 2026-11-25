@@ -46,12 +46,14 @@ def patch_config(text, role):
                              f"pub fn {function}() -> bool {{\n    {str(value).lower()}\n}}")
     # Desktop Host native service/process names must match actual executable names.
     app_name = ('''    pub static ref APP_NAME: RwLock<String> = RwLock::new(
-        if cfg!(target_os = "windows") { "SindreDeskHost" }
+        (if cfg!(target_os = "windows") { "SindreDeskHost" }
         else if cfg!(target_os = "linux") { "sindredesk-host" }
-        else { "SindreDesk Host" }.to_owned());''' if host else
+        else { "SindreDesk Host" }).to_owned());''' if host else
         f'    pub static ref APP_NAME: RwLock<String> = RwLock::new("{name}".to_owned());')
     text = replace_regex(text,
         r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;', app_name)
+    if host:
+        text = patch_legacy_host_config(text)
     # 禁止旧配置、EXE 文件名及公共服务器自动回退；空配置仅使用不可用的本地端口。
     text = replace_regex(text,
         r'^    pub fn get_rendezvous_server\(\) -> String \{\n.*?^    \}',
@@ -72,6 +74,54 @@ def patch_config(text, role):
     text = replace_regex(text, r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;',
                          'pub const RENDEZVOUS_SERVERS: &[&str] = &["127.0.0.1:0"];')
     return text
+
+
+def patch_legacy_host_config(text):
+    # Migrate only the two native configuration files in the current account.
+    # The old files remain untouched, and a new existing config is never overwritten.
+    return replace_once(text,
+        '        Config::with_extension(Self::path(name))',
+        '''        let path = Config::with_extension(Self::path(name));
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if (suffix.is_empty() || suffix == "2") && !path.exists() {
+            if let Some(project) = directories_next::ProjectDirs::from("", "", "SindreDesk Host") {
+                let legacy = Config::with_extension(
+                    patch(project.config_dir().to_path_buf()).join(format!("SindreDesk Host{suffix}"))
+                );
+                if legacy != path && std::fs::symlink_metadata(&legacy)
+                    .map(|m| m.file_type().is_file()).unwrap_or(false) {
+                    if let Some(parent) = path.parent() {
+                        let tmp = parent.join(format!(".sindre-migrate-{:016x}", rand::random::<u64>()));
+                        let result = (|| -> std::io::Result<()> {
+                            std::fs::create_dir_all(parent)?;
+                            let mut options = std::fs::OpenOptions::new();
+                            options.write(true).create_new(true);
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::OpenOptionsExt;
+                                options.mode(0o600);
+                            }
+                            let mut output = options.open(&tmp)?;
+                            let copied = (|| -> std::io::Result<()> {
+                                std::io::copy(&mut std::fs::File::open(&legacy)?, &mut output)?;
+                                output.sync_all()?;
+                                Ok(())
+                            })();
+                            drop(output);
+                            let linked = copied.and_then(|_| std::fs::hard_link(&tmp, &path));
+                            let _ = std::fs::remove_file(&tmp);
+                            linked
+                        })();
+                        if result.is_err() && !path.exists() {
+                            // Do not lose the old machine identity when migration fails.
+                            log::warn!("SindreDesk Host config migration deferred");
+                            return legacy;
+                        }
+                    }
+                }
+            }
+        }
+        path''')
 
 
 def patch_client(text):
