@@ -75,8 +75,6 @@ def patch_config(text, role):
     }''')
     text = replace_regex(text, r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;',
                          'pub const RENDEZVOUS_SERVERS: &[&str] = &["127.0.0.1:0"];')
-    text = replace_once(text, "pub struct DiscoveryPeer {",
-        'pub struct DiscoveryPeer {\n    #[serde(default, deserialize_with = "deserialize_string")]\n    pub fingerprint: String,')
     return text
 
 
@@ -129,107 +127,25 @@ def patch_legacy_host_config(text):
 
 
 def patch_client(text):
-    text = replace_once(text, '    net::SocketAddr,', '    net::{IpAddr, SocketAddr},')
     text = replace_once(text,
-        '        if config::is_incoming_only() {\n            bail!("Incoming only mode");\n        }\n        // to-do: remember the port for each peer, so that we can retry easier\n        if hbb_common::is_ip_str(peer) {\n            return Ok((\n                (\n                    connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT)\n                        .await?,\n                    true,\n                    None,\n                    None,\n                    "TCP",\n                ),\n                (0, "".to_owned()),\n                false,\n            ));\n        }\n        // Allow connect to {domain}:{port}\n        if hbb_common::is_domain_port_str(peer) {\n            return Ok((\n                (\n                    connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?,\n                    true,\n                    None,\n                    None,\n                    "TCP",\n                ),\n                (0, "".to_owned()),\n                false,\n            ));\n        }',
+        '        if config::is_incoming_only() {\n            bail!("Incoming only mode");\n        }',
         '''        if config::is_incoming_only() {
             bail!("Incoming only mode");
         }
-        // Serverless LAN connections are private-IPv4 only. The user must compare
-        // the host's SHA-256 signing-key fingerprint before the encrypted handshake.
         if hbb_common::is_ip_str(peer) || hbb_common::is_domain_port_str(peer) {
-            let address = if hbb_common::is_ip_str(peer) {
-                let ip: std::net::Ipv4Addr = peer
-                    .parse()
-                    .map_err(|_| anyhow!("LAN direct access requires IPv4"))?;
-                if !ip.is_private() {
-                    bail!("LAN direct access is limited to private IPv4 addresses");
-                }
-                check_port(peer, RELAY_PORT + 1)
-            } else {
-                let address: SocketAddr = peer
-                    .parse()
-                    .map_err(|_| anyhow!("LAN direct access requires an IPv4 address and port"))?;
-                match address.ip() {
-                    IpAddr::V4(ip) if ip.is_private() && address.port() == RELAY_PORT + 1 => {}
-                    _ => bail!("LAN direct access requires private IPv4 and port {}", RELAY_PORT + 1),
-                }
-                peer.to_owned()
-            };
-            let option = format!("sindre-lan-peer-fingerprint:{}", peer);
-            let expected_fingerprint = Config::get_option(&option);
-            if expected_fingerprint.len() != 64
-                || !expected_fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
-            {
-                bail!("Enter the 64-character device fingerprint shown on the Host");
-            }
-            let mut conn = connect_tcp_local(&address, None, CONNECT_TIMEOUT).await?;
-            let bytes = timeout(READ_TIMEOUT, conn.next())
-                .await?
-                .ok_or_else(|| anyhow!("LAN host closed before identity exchange"))??;
-            let identity = Message::parse_from_bytes(&bytes)?;
-            let host_sign_pk = match identity.union {
-                Some(message::Union::PublicKey(pk))
-                    if pk.symmetric_value.is_empty()
-                        && pk.asymmetric_value.len() == sign::PUBLICKEYBYTES =>
-                {
-                    sign::PublicKey(
-                        pk.asymmetric_value
-                            .as_ref()
-                            .try_into()
-                            .map_err(|_| anyhow!("Invalid LAN host signing key"))?,
-                    )
-                }
-                _ => bail!("Invalid LAN host identity response"),
-            };
-            let actual_fingerprint = Sha256::digest(&host_sign_pk.0)
-                .iter()
-                .map(|byte| format!("{:02x}", byte))
-                .collect::<String>();
-            if !actual_fingerprint.eq_ignore_ascii_case(&expected_fingerprint) {
-                bail!("LAN device fingerprint mismatch; compare it with the Host screen");
-            }
-            Self::secure_connection(peer, Vec::new(), "", &mut conn, Some(host_sign_pk)).await?;
-            if !conn.is_secured() {
-                bail!("LAN connection did not establish encryption");
-            }
-            return Ok(((conn, true, None, None, "TCP"), (0, "".to_owned()), false));
+            bail!("Secure offline LAN mode is not available");
         }
         if Config::get_option("custom-rendezvous-server").trim().is_empty()
-            || key.is_empty()
-            || get_rs_pk(key).is_none()
-        {
-            bail!("Configure the private server and valid public key for connection-code access");
+            || key.is_empty() || get_rs_pk(key).is_none() {
+            bail!("Configure the private server and valid public key");
         }''')
-    text = replace_once(text,
-        '        let res = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn).await;',
-        '        let res = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn, None).await;')
-    text = replace_once(text,
-        '''        key: &str,
-        conn: &mut Stream,
-    ) -> ResultType<Option<Vec<u8>>> {
-        let rs_pk''',
-        '''        key: &str,
-        conn: &mut Stream,
-        trusted_peer_pk: Option<sign::PublicKey>,
-    ) -> ResultType<Option<Vec<u8>>> {
-        let rs_pk''')
-    text = replace_once(text, '        let mut sign_pk = None;\n        let mut option_pk = None;\n        if !signed_id_pk.is_empty() {',
-        '        let mut sign_pk = trusted_peer_pk;\n        let mut option_pk = None;\n        if sign_pk.is_none() && !signed_id_pk.is_empty() {')
-    text = replace_once(text,
-        '''                        if let Ok((id, their_pk_b)) = decode_id_pk(&si.id, &sign_pk) {
-                            if id == peer_id {''',
-        '''                        if let Ok((id, their_pk_b)) = decode_id_pk(&si.id, &sign_pk) {
-                            if id == peer_id
-                                || hbb_common::is_ip_str(peer_id)
-                                || hbb_common::is_domain_port_str(peer_id)
-                            {''')
     text = replace_once(text,
         '        let other_server = interface.get_lch().read().unwrap().other_server.clone();',
         '''        let other_server = interface.get_lch().read().unwrap().other_server.clone();
         if other_server.is_some() {
             bail!("Alternate rendezvous servers are disabled");
         }''')
+    # 上游握手可能退回未加密；禁止把这样的连接交给登录流程。
     text = replace_once(text, '        Ok(option_pk)\n    }',
         '''        if !conn.is_secured() {
             bail!("Encrypted peer handshake is required");
@@ -242,113 +158,6 @@ def patch_client(text):
                 return Ok(option_pk);''',
         '''                bail!("Invalid or missing peer identity signature");''')
     return text
-
-def patch_rendezvous_mediator(text):
-    text = replace_once(text, '    net::SocketAddr,', '    net::{IpAddr, SocketAddr},')
-    text = replace_once(text,
-        '''        if config::is_outgoing_only() {
-            loop {
-                sleep(1.).await;
-            }
-        }''',
-        '''        if config::is_outgoing_only() {
-            loop {
-                sleep(1.).await;
-            }
-        }
-        // Host-only: publish a stable device-key fingerprint and enable local discovery.
-        use hbb_common::sha2::Digest;
-        let (_, host_signing_pk) = Config::get_key_pair();
-        let fingerprint = hbb_common::sha2::Sha256::digest(&host_signing_pk)
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect::<String>();
-        Config::set_option("sindre-lan-fingerprint".to_owned(), fingerprint);
-        Config::set_option("enable-lan-discovery".to_owned(), "Y".to_owned());
-        Config::set_option(OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned());''')
-    text = replace_once(text,
-        '''        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let start_lan_listening = crate::platform::is_installed();''',
-        '''        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let start_lan_listening = true;''')
-    text = replace_once(text,
-        '''            if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
-                stream.set_nodelay(true).ok();''',
-        '''            if let Ok(Ok((stream, addr))) = hbb_common::timeout(1000, l.accept()).await {
-                if !matches!(addr.ip(), IpAddr::V4(ip) if ip.is_private()) {
-                    log::warn!("Reject non-private direct connection from {}", addr);
-                    continue;
-                }
-                stream.set_nodelay(true).ok();''')
-    text = replace_once(text,
-        '''                tokio::spawn(async move {
-                    allow_err!(
-                        crate::server::create_tcp_connection(
-                            server,
-                            hbb_common::Stream::from(stream, local_addr),
-                            addr,
-                            false,
-                            ConnectionMeta::default(), // Direct connections don't have server-side user context.
-                        )
-                        .await
-                    );
-                });''',
-        '''                tokio::spawn(async move {
-                    let mut stream = hbb_common::Stream::from(stream, local_addr);
-                    let (_, host_signing_pk) = Config::get_key_pair();
-                    let mut identity = hbb_common::message_proto::Message::new();
-                    identity.set_public_key(hbb_common::message_proto::PublicKey {
-                        asymmetric_value: host_signing_pk.into(),
-                        ..Default::default()
-                    });
-                    allow_err!(async {
-                        // Send the host signing key first so the client can verify its fingerprint.
-                        stream.send(&identity).await?;
-                        crate::server::create_tcp_connection(
-                            server,
-                            stream,
-                            addr,
-                            true,
-                            ConnectionMeta::default(), // Direct connections don't have server-side user context.
-                        )
-                        .await
-                    }.await);
-                });''')
-    return text
-
-
-def patch_lan(text):
-    text = replace_once(text,
-        '''                                    platform: whoami::platform().to_string(),
-                                    ..Default::default()''',
-        '''                                    platform: whoami::platform().to_string(),
-                                    misc: Config::get_option("sindre-lan-fingerprint"),
-                                    ..Default::default()''')
-    return replace_once(text,
-        '''                                    platform: p.platform.clone(),
-                                    online: true,''',
-        '''                                    platform: p.platform.clone(),
-                                    fingerprint: p.misc.clone(),
-                                    online: true,''')
-    
-
-def patch_ui_interface(text):
-    return replace_once(text,
-        '''                ("platform", peer.platform.clone()),
-            ])''',
-        '''                ("platform", peer.platform.clone()),
-                ("ip", peer.ip_mac.keys().next().cloned().unwrap_or_default()),
-                ("fingerprint", peer.fingerprint.clone()),
-            ])''')
-
-
-def patch_peer_model(text):
-    text = replace_once(text, '  final String id;\n', '  final String id;\n  final String ip;\n  final String fingerprint;\n')
-    text = replace_once(text, "      : id = json['id'] ?? '',\n", "      : id = json['id'] ?? '',\n        ip = json['ip'] ?? '',\n        fingerprint = json['fingerprint'] ?? '',\n")
-    text = replace_once(text, '      "id": id,\n', '      "id": id,\n      "ip": ip,\n      "fingerprint": fingerprint,\n')
-    text = replace_once(text, '    required this.id,\n', "    required this.id,\n    this.ip = '',\n    this.fingerprint = '',\n")
-    text = replace_once(text, '    return id == other.id &&\n', '    return id == other.id &&\n        ip == other.ip &&\n        fingerprint == other.fingerprint &&\n')
-    return replace_once(text, '        id: other.id,\n', '        id: other.id,\n        ip: other.ip,\n        fingerprint: other.fingerprint,\n')
 
 
 def patch_common(text):
@@ -607,10 +416,12 @@ def prepare(source, role):
         bail!("Incoming connections require Host role and encryption");
     }
     Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;'''))
-    patch(source / "src/rendezvous_mediator.rs", patch_rendezvous_mediator)
-    patch(source / "src/lan.rs", patch_lan)
-    patch(source / "src/ui_interface.rs", patch_ui_interface)
-    patch(source / "flutter/lib/models/peer_model.dart", patch_peer_model)
+    patch(source / "src/rendezvous_mediator.rs", lambda s: replace_once(s,
+        '''        let server_cloned = server.clone();
+        tokio::spawn(async move {
+            direct_server(server_cloned).await;
+        });''',
+        '''        // 不启动上游未加密直接 IP 监听。'''))
     patch(source / "flutter/lib/main.dart", patch_main)
     patch(source / "flutter/lib/desktop/pages/desktop_tab_page.dart", patch_desktop_tab)
     # Main window uses the OS title bar; keep native remote/CM tab behavior.

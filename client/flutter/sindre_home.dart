@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 
 import '../common.dart';
 import '../models/platform_model.dart';
+import '../models/peer_model.dart';
 import '../models/server_model.dart' show kUseTemporaryPassword, kUsePermanentPassword;
 import '../mobile/pages/server_page.dart' as mobile;
 
@@ -21,6 +22,28 @@ bool validPublicKey(String value) {
     return false;
   }
 }
+
+bool _isPrivateIPv4(String value) {
+  final ip = InternetAddress.tryParse(value);
+  if (ip == null || ip.type != InternetAddressType.IPv4) return false;
+  final parts = value.split('.').map(int.tryParse).toList();
+  if (parts.length != 4 || parts.any((part) => part == null)) return false;
+  final a = parts[0]!;
+  final b = parts[1]!;
+  return a == 10 ||
+      (a == 192 && b == 168) ||
+      (a == 172 && b >= 16 && b <= 31);
+}
+
+bool _isPrivateLanAddress(String value) {
+  final parts = value.trim().split(':');
+  if (parts.length > 2) return false;
+  final port = parts.length == 2 ? int.tryParse(parts[1]) : 21118;
+  return port == 21118 && _isPrivateIPv4(parts.first);
+}
+
+bool validFingerprint(String value) =>
+    RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value.replaceAll(RegExp(r'[:\s]'), ''));
 
 bool validServer(String value) {
   final host = value.trim();
@@ -47,7 +70,9 @@ class SindreHome extends StatefulWidget {
 class _SindreHomeState extends State<SindreHome> {
   final _id = TextEditingController();
   final _password = TextEditingController();
+  final _fingerprint = TextEditingController();
   Timer? _timer;
+  Timer? _lanScanTimer;
   bool _busy = false;
   bool _showPassword = false;
   String _message = '';
@@ -75,6 +100,8 @@ class _SindreHomeState extends State<SindreHome> {
       _timer = Timer.periodic(const Duration(seconds: 5), (_) {
         unawaited(_probeServer());
       });
+      _scanLan();
+      _lanScanTimer = Timer.periodic(const Duration(seconds: 15), (_) => _scanLan());
     }
     if (host && isDesktop) {
       gFFI.serverModel.fetchID();
@@ -90,6 +117,8 @@ class _SindreHomeState extends State<SindreHome> {
     _timer?.cancel();
     _id.dispose();
     _password.dispose();
+    _fingerprint.dispose();
+    _lanScanTimer?.cancel();
     super.dispose();
   }
 
