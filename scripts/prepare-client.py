@@ -198,6 +198,20 @@ def prepare(source, role):
             'format!("install -d -m 700 {} && install -m 600 {} {} && install -m 600 {} {} &&", dst, src1, dst, src2, dst)'))
 
     patch(source / "src/flutter_ffi.rs", patch_android_native)
+    if role == "host":
+        patch(source / "src/flutter_ffi.rs", lambda s: replace_once(s,
+            'pub fn main_get_common(key: String) -> String {',
+            '''pub fn main_get_common(key: String) -> String {
+    if key == "sindre-installed-host" {
+        #[cfg(target_os = "windows")]
+        return (config::is_incoming_only() && crate::platform::is_cur_exe_the_installed()).to_string();
+        #[cfg(not(target_os = "windows"))]
+        return false.to_string();
+    }'''))
+        patch(source / "src/platform/linux.rs", lambda s: replace_once(s,
+            '"{cp} systemctl enable {app_name}; systemctl start {app_name};"',
+            '"{cp} systemctl enable {app_name} && systemctl start {app_name};"'))
+
     patch(source / "src/server.rs", lambda s: replace_once(s,
         '    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;',
         '''    if hbb_common::config::is_outgoing_only() || !stream.is_secured() {

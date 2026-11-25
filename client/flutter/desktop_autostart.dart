@@ -8,7 +8,7 @@ class DesktopAutostart {
     if (Platform.isWindows) {
       final result = await Process.run('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-Command',
-        r'''$s = Get-CimInstance Win32_Service -Filter "Name='SindreDeskHost'"; if ($s -and $s.StartMode -eq 'Auto') { Write-Output 'enabled' }''',
+        r'''$ErrorActionPreference = 'Stop'; $s = Get-CimInstance Win32_Service -Filter "Name='SindreDeskHost'"; if ($s -and $s.StartMode -eq 'Auto') { Write-Output 'enabled' }''',
       ]);
       if (result.exitCode != 0) throw StateError('Service query failed');
       return result.stdout.toString().trim() == 'enabled';

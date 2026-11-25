@@ -48,6 +48,20 @@ class PrepareClientTests(unittest.TestCase):
         self.assertEqual(signing.escape("中"), r"\u4e2d")
         self.assertEqual(signing.escape("😀"), r"\ud83d\ude00")
 
+    def test_desktop_service_scope(self):
+        source = (ROOT / "client/flutter/desktop_autostart.dart").read_text()
+        self.assertIn("--install-service", source)
+        self.assertIn("--uninstall-service", source)
+        self.assertNotIn("Startup", source)
+        self.assertNotIn("autostart/", source)
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("Random.secure()", ui)
+        self.assertIn("List.generate(6,", ui)
+        self.assertIn("mainSetPermanentPasswordWithResult", ui)
+        self.assertIn("DesktopAutostart.supported ? kUsePermanentPassword : kUseTemporaryPassword", ui)
+        unit = (ROOT / "deploy/sindredesk-host.service").read_text()
+        self.assertIn("ExecStart=/usr/lib/sindredesk-host/sindredesk-host --service", unit)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])

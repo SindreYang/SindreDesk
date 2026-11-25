@@ -568,13 +568,25 @@ class _DesktopAutostartSwitchState extends State<_DesktopAutostartSwitch> {
           if (mounted) setState(() => _error = '请先配置私服和固定连接密码');
           return;
         }
-        if (!bind.mainIsInstalled()) {
+        final installed = Platform.isWindows
+            ? await bind.mainGetCommon(key: 'sindre-installed-host') == 'true'
+            : Platform.resolvedExecutable == '/usr/lib/sindredesk-host/sindredesk-host';
+        if (!installed) {
           if (Platform.isWindows) {
             await bind.mainSetOption(key: 'stop-service', value: '');
             bind.mainGotoInstall();
           } else if (mounted) {
             setState(() => _error = '请先按 README 安装 Linux 系统服务，再从已安装目录启动 Host');
           }
+          return;
+        }
+      }
+      if (!value) {
+        final installed = Platform.isWindows
+            ? await bind.mainGetCommon(key: 'sindre-installed-host') == 'true'
+            : Platform.resolvedExecutable == '/usr/lib/sindredesk-host/sindredesk-host';
+        if (!installed) {
+          if (mounted) setState(() => _error = '请从正式安装目录打开 Host 后操作');
           return;
         }
       }
