@@ -215,6 +215,27 @@ class PrepareClientTests(unittest.TestCase):
             self.assertLessEqual(offset + size, len(ico))
         self.assertEqual(ico[-len(png):], png)
 
+    def test_isolated_lan_and_portable(self):
+        self.assertEqual(module.LAN_DIRECT_PORT, 32118)
+        self.assertEqual(module.LAN_DISCOVERY_PORT, 32119)
+        self.assertIn("SINDRE_LAN_DISCOVERY_PORT", module.patch_lan_ports(
+            "config::{self, RENDEZVOUS_PORT},\n(RENDEZVOUS_PORT + 3) as _\n    let socket = std::net::UdpSocket::bind(addr)?;"))
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        self.assertIn("const int _lanDirectPort = 32118", ui)
+        self.assertIn("局域网端口不可用", ui)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("sindre_lan_status", source)
+        self.assertIn("lan-tcp-bind-failed", source)
+        self.assertIn("lan-invalid-host-identity", source)
+        self.assertIn("md5::compute(include_bytes!", source)
+        self.assertIn("file.write_to_file(&dir).is_err()", source)
+        log = (ROOT / "client/native/sindre_diag.rs").read_text()
+        self.assertIn("SINDRE_LOG_DIR", log)
+        self.assertIn("OpenOptions", log)
+        workflow = (ROOT / ".github/workflows/client-build-verify.yml").read_text()
+        self.assertIn("python generate.py", workflow)
+        self.assertIn("sha256sum *.apk *.exe *.tar.gz", workflow)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])
