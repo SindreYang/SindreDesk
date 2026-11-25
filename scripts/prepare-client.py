@@ -253,8 +253,8 @@ def patch_client(text):
         '''        if config::is_incoming_only() {
             bail!("Incoming only mode");
         }
-        // Serverless LAN connections are private-IPv4 only. The user must compare
-        // the host's SHA-256 signing-key fingerprint before the encrypted handshake.
+        // Private IPv4 only. The signed handshake is mandatory. Previously
+        // authenticated keys are checked before sending password authentication data.
         if hbb_common::is_ip_str(peer) || peer.parse::<SocketAddr>().is_ok() {
             // Keep the destination as a resolved SocketAddr: the socket API
             // accepts this type directly and SocketAddr::port() returns u16.
@@ -268,14 +268,6 @@ def patch_client(text):
             match address.ip() {
                 IpAddr::V4(ip) if ip.is_private() && address.port() == LAN_DIRECT_PORT => {}
                 _ => bail!("LAN direct access requires private IPv4 and port {}", LAN_DIRECT_PORT),
-            }
-            let option = format!("sindre-lan-peer-fingerprint:{}", peer);
-            let expected_fingerprint = Config::get_option(&option);
-            if expected_fingerprint.len() != 64
-                || !expected_fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
-            {
-                crate::sindre_diag::record("lan-fingerprint-required", Some(address), None);
-                bail!("Enter the 64-character device fingerprint shown on the Host");
             }
             crate::sindre_diag::record("lan-connect-start", Some(address), None);
             let mut conn = connect_tcp_local(address, None, CONNECT_TIMEOUT).await
@@ -318,15 +310,9 @@ def patch_client(text):
                     bail!("目标不是兼容的 SindreDesk Host，请检查被控端版本和局域网端口");
                 }
             };
-            let actual_fingerprint = Sha256::digest(&host_sign_pk.0)
-                .iter()
-                .map(|byte| format!("{:02x}", byte))
-                .collect::<String>();
-            if !actual_fingerprint.eq_ignore_ascii_case(&expected_fingerprint) {
-                crate::sindre_diag::record("lan-fingerprint-mismatch", Some(address), None);
-                bail!("LAN device fingerprint mismatch; compare it with the Host screen");
-            }
-            crate::sindre_diag::record("lan-fingerprint-verified", Some(address), None);
+            let host_key = host_sign_pk.0.to_vec();
+            crate::sindre_trust::check(peer, &host_key)?;
+            crate::sindre_diag::record("lan-identity-checked", Some(address), None);
             Self::secure_connection(peer, Vec::new(), "", &mut conn, Some(host_sign_pk)).await
                 .map_err(|err| {
                     crate::sindre_diag::record("lan-encryption-failed", Some(address), None);
@@ -336,7 +322,7 @@ def patch_client(text):
                 bail!("LAN connection did not establish encryption");
             }
             crate::sindre_diag::record("lan-encryption-ready", Some(address), None);
-            return Ok(((conn, true, None, None, "TCP"), (0, "".to_owned()), false));
+            return Ok(((conn, true, Some(host_key), None, "TCP"), (0, "".to_owned()), false));
         }
         if Config::get_option("custom-rendezvous-server").trim().is_empty()
             || key.is_empty()
@@ -402,14 +388,7 @@ def patch_rendezvous_mediator(text):
                 sleep(1.).await;
             }
         }
-        // Host-only: publish a stable device-key fingerprint and enable local discovery.
-        use hbb_common::sha2::Digest;
-        let (_, host_signing_pk) = Config::get_key_pair();
-        let fingerprint = hbb_common::sha2::Sha256::digest(&host_signing_pk)
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect::<String>();
-        Config::set_option("sindre-lan-fingerprint".to_owned(), fingerprint);
+        // Host-only: enable local discovery; identity is checked over the TCP handshake.
         Config::set_option("enable-lan-discovery".to_owned(), "Y".to_owned());
         Config::set_option(OPTION_DIRECT_SERVER.to_owned(), "Y".to_owned());
         Config::set_option("direct-access-port".to_owned(), hbb_common::config::SINDRE_LAN_DIRECT_PORT.to_string());''')
@@ -453,7 +432,7 @@ def patch_rendezvous_mediator(text):
                         ..Default::default()
                     });
                     allow_err!(async {
-                        // Send the host signing key first so the client can verify its fingerprint.
+                        // Send the signing key for the authenticated encrypted handshake.
                         crate::sindre_diag::record("lan-host-identity-send", Some(addr), None);
                         stream.send(&identity).await?;
                         crate::server::create_tcp_connection(
@@ -546,19 +525,13 @@ def patch_lan_status_ffi(text):
 
 
 def patch_lan(text):
-    text = replace_once(text,
-        '''                                    platform: whoami::platform().to_string(),
-                                    ..Default::default()''',
-        '''                                    platform: whoami::platform().to_string(),
-                                    misc: Config::get_option("sindre-lan-fingerprint"),
-                                    ..Default::default()''')
     return replace_once(text,
         '''                                    platform: p.platform.clone(),
                                     online: true,''',
         '''                                    platform: p.platform.clone(),
-                                    fingerprint: p.misc.clone(),
+                                    fingerprint: String::new(),
                                     online: true,''')
-    
+
 
 def patch_ui_interface(text):
     return replace_once(text,
@@ -794,9 +767,47 @@ def patch_android_native(text):
         '        if config::is_outgoing_only() { return; }\n        log::debug!("startService from jvm");')
 
 
+def patch_lan_trust_session(text):
+    text = replace_once(text, '    sent_close_reason: bool,',
+        '    sent_close_reason: bool,\n    sindre_lan_key: Option<Vec<u8>>,')
+    text = replace_once(text, '            sent_close_reason: false,',
+        '            sent_close_reason: false,\n            sindre_lan_key: None,')
+    text = replace_once(text, '                let is_secured = peer.is_secured();',
+        '''                let is_secured = peer.is_secured();
+                let id = self.handler.get_id();
+                self.sindre_lan_key = if is_secured && direct
+                    && (id.parse::<std::net::Ipv4Addr>().is_ok()
+                        || id.parse::<std::net::SocketAddrV4>().is_ok()) {
+                    pk.clone()
+                } else {
+                    None
+                };''')
+    return replace_once(text,
+        '                    Some(login_response::Union::PeerInfo(pi)) => {',
+        '''                    Some(login_response::Union::PeerInfo(pi)) => {
+                        if let Some(key) = self.sindre_lan_key.take() {
+                            if crate::sindre_trust::remember(&self.handler.get_id(), &key).is_err() {
+                                crate::sindre_diag::record("lan-trust-save-failed", None, None);
+                                self.handler.on_error("无法保存局域网设备信任记录，连接已停止");
+                                return false;
+                            }
+                        }''')
+
+
+def patch_lan_trust_ffi(text):
+    return replace_once(text, 'pub fn main_get_common(key: String) -> String {',
+        '''pub fn main_get_common(key: String) -> String {
+    if key == "sindre-clear-lan-trust" && config::is_outgoing_only() {
+        return crate::sindre_trust::clear().is_ok().to_string();
+    }''')
+
+
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
+    patch(source / "src/client/io_loop.rs", patch_lan_trust_session)
+    patch(source / "src/flutter_ffi.rs", patch_lan_trust_ffi)
+    shutil.copy2(ROOT / "client/native/sindre_trust.rs", source / "src/sindre_trust.rs")
     patch(source / "src/common.rs", patch_common)
     if role == "host":
         # Do not discover or reuse a legacy RustDesk installation.
@@ -853,7 +864,7 @@ def prepare(source, role):
         patch(source / "src/ipc.rs", patch_lan_status_ipc)
         patch(source / "src/flutter_ffi.rs", patch_lan_status_ffi)
     shutil.copy2(ROOT / "client/native/sindre_diag.rs", source / "src/sindre_diag.rs")
-    patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;'))
+    patch(source / "src/lib.rs", lambda s: replace_once(s, 'mod rendezvous_mediator;', 'mod rendezvous_mediator;\nmod sindre_diag;\nmod sindre_trust;'))
     patch(source / "src/core_main.rs", lambda s: replace_once(s, '    hbb_common::init_log(false, &log_name);',
         '    hbb_common::init_log(false, &log_name);\n    crate::sindre_diag::record("desktop-start", None, None);'))
     patch(source / "src/server/connection.rs", lambda s: replace_once(

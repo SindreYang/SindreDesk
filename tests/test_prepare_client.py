@@ -96,7 +96,7 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("if (!model.isStart) mobile.ServiceNotRunningNotification()", android)
         source = (ROOT / "scripts/prepare-client.py").read_text()
         self.assertNotIn('Secure offline LAN mode is not available', source)
-        self.assertIn('sindre-lan-peer-fingerprint', source)
+        self.assertIn('sindre_trust::check(peer, &host_key)', source)
         self.assertIn('Some(host_sign_pk)', source)
         self.assertIn('is_private()', source)
         self.assertIn('patch_rendezvous_mediator', source)
@@ -170,7 +170,7 @@ class PrepareClientTests(unittest.TestCase):
 
     def test_native_lan_security_guards(self):
         source = (ROOT / "scripts/prepare-client.py").read_text()
-        self.assertIn("sindre-lan-peer-fingerprint", source)
+        self.assertIn("sindre_trust::check(peer, &host_key)", source)
         self.assertIn("Some(host_sign_pk)", source)
         self.assertIn("peer.parse::<SocketAddr>().is_ok()", source)
         self.assertIn("const LAN_DIRECT_PORT: u16", source)
@@ -184,8 +184,7 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("IpAddr::V4(ip) if ip.is_private()", source)
         self.assertIn("Config::set_option(OPTION_DIRECT_SERVER.to_owned(),", source)
         self.assertIn('Config::set_option("direct-access-port".to_owned()', source)
-        self.assertIn('misc: Config::get_option("sindre-lan-fingerprint")', source)
-        self.assertIn("fingerprint: p.misc.clone()", source)
+        self.assertIn("fingerprint: String::new()", source)
         self.assertNotIn("Secure offline LAN mode is not available", source)
 
     def test_lan_peer_data_patches(self):
@@ -194,8 +193,7 @@ class PrepareClientTests(unittest.TestCase):
                                     platform: p.platform.clone(),
                                     online: true,'''
         result = module.patch_lan(lan)
-        self.assertIn('misc: Config::get_option("sindre-lan-fingerprint")', result)
-        self.assertIn("fingerprint: p.misc.clone()", result)
+        self.assertIn("fingerprint: String::new()", result)
         ui = '''                ("platform", peer.platform.clone()),
             ])'''
         result = module.patch_ui_interface(ui)
@@ -240,6 +238,23 @@ class PrepareClientTests(unittest.TestCase):
         self.assertNotIn("patch_windows_portable", source)
         self.assertIn("std::env::current_exe()", log)
         self.assertIn("Config::log_path()", log)
+
+    def test_password_only_lan(self):
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
+        for obsolete in ("validFingerprint", "_confirmIdentity", "_forgetIdentity", "设备指纹"):
+            self.assertNotIn(obsolete, ui)
+        source = (ROOT / "scripts/prepare-client.py").read_text()
+        self.assertIn("sindre_trust::check(peer, &host_key)", source)
+        self.assertIn("Some(host_key)", source)
+        self.assertIn("Some(login_response::Union::PeerInfo(pi))", source)
+        self.assertIn("sindre_trust::remember", source)
+        self.assertIn("Some(host_sign_pk)", source)
+        self.assertIn("if !conn.is_secured()", source)
+        trust = (ROOT / "client/native/sindre_trust.rs").read_text()
+        self.assertIn("fs::hard_link(&tmp, &target)", trust)
+        self.assertIn("create_new(true)", trust)
+        self.assertIn("Ok(saved) if saved == key", trust)
+        self.assertNotIn("sindre-lan-peer-fingerprint:", ui)
 
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
