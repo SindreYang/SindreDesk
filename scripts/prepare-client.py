@@ -345,7 +345,15 @@ def patch_ui_interface(text):
 def patch_peer_model(text):
     text = replace_once(text, '  final String id;\n', '  final String id;\n  final String ip;\n  final String fingerprint;\n')
     text = replace_once(text, "      : id = json['id'] ?? '',\n", "      : id = json['id'] ?? '',\n        ip = json['ip'] ?? '',\n        fingerprint = json['fingerprint'] ?? '',\n")
-    text = replace_once(text, '      "id": id,\n', '      "id": id,\n      "ip": ip,\n      "fingerprint": fingerprint,\n')
+    text = replace_once(text,
+        '''    return <String, dynamic>{
+      "id": id,
+      "hash": hash,''',
+        '''    return <String, dynamic>{
+      "id": id,
+      "ip": ip,
+      "fingerprint": fingerprint,
+      "hash": hash,''')
     text = replace_once(text, '    required this.id,\n', "    required this.id,\n    this.ip = '',\n    this.fingerprint = '',\n")
     text = replace_once(text, '    return id == other.id &&\n', '    return id == other.id &&\n        ip == other.ip &&\n        fingerprint == other.fingerprint &&\n')
     return replace_once(text, '        id: other.id,\n', '        id: other.id,\n        ip: other.ip,\n        fingerprint: other.fingerprint,\n')
