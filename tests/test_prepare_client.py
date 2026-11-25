@@ -81,6 +81,19 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("const Size(440, 440)", source)
         self.assertIn("const Size(480, 540)", source)
 
+    def test_desktop_icon_format(self):
+        import struct
+        png, ico = module.desktop_icon_files()
+        self.assertEqual(png[:8], bytes.fromhex("89504e470d0a1a0a"))
+        self.assertEqual(struct.unpack_from("<HHH", ico), (0, 1, 7))
+        for i in range(7):
+            width, height, _, _, planes, depth, size, offset = struct.unpack_from(
+                "<BBBBHHII", ico, 6 + i * 16)
+            self.assertEqual(width, height)
+            self.assertEqual((planes, depth), (1, 32))
+            self.assertLessEqual(offset + size, len(ico))
+        self.assertEqual(ico[-len(png):], png)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])

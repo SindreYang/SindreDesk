@@ -1,6 +1,8 @@
 """从固定上游源码生成独立角色工作树；不直接修改上游仓库。"""
 import argparse
 import re
+import struct
+import zlib
 import shutil
 import subprocess
 import tempfile
@@ -211,6 +213,125 @@ def patch_gradle(text, role):
     return text
 
 
+def icon_rgba(size):
+    """SindreDesk: blue rounded square, white monitor and connection arrow."""
+    def sample(x, y):
+        # Supersampled geometric drawing; independent of OS fonts and image libraries.
+        dx = max(abs(x - 0.5) - 0.32, 0)
+        dy = max(abs(y - 0.5) - 0.32, 0)
+        if dx * dx + dy * dy > 0.13 ** 2:
+            return (0, 0, 0, 0)
+        blue = (22, 104, 211, 255)
+        white = (255, 255, 255, 255)
+        screen = 0.22 <= x <= 0.78 and 0.24 <= y <= 0.65
+        edge = screen and (x < 0.29 or x > 0.71 or y < 0.31 or y > 0.58)
+        stand = 0.465 <= x <= 0.535 and 0.65 <= y <= 0.76
+        base = 0.34 <= x <= 0.66 and 0.74 <= y <= 0.80
+        arrow = (0.36 <= x <= 0.63 and 0.415 <= y <= 0.475) or (
+            0.50 <= x <= 0.65 and abs(abs(y - 0.445) - (0.65 - x)) <= 0.035)
+        return white if edge or stand or base or arrow else blue
+
+    pixels = bytearray()
+    for y in range(size):
+        for x in range(size):
+            samples = [sample((x + (i + 0.5) / 4) / size,
+                              (y + (j + 0.5) / 4) / size)
+                       for i in range(4) for j in range(4)]
+            alpha = sum(p[3] for p in samples)
+            if alpha:
+                pixels.extend([sum(p[c] * p[3] for p in samples) // alpha
+                               for c in range(3)] + [round(alpha / 16)])
+            else:
+                pixels.extend((0, 0, 0, 0))
+    return bytes(pixels)
+
+
+def icon_png(size, rgba):
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data +
+                struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+    rows = b"".join(b"\0" + rgba[y * size * 4:(y + 1) * size * 4]
+                    for y in range(size))
+    return (b"\x89PNG\r\n\x1a\n" +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def icon_dib(size, rgba):
+    stride = ((size + 31) // 32) * 4
+    pixels, mask = bytearray(), bytearray()
+    for y in reversed(range(size)):
+        row = bytearray(stride)
+        for x in range(size):
+            r, g, b, a = rgba[(y * size + x) * 4:(y * size + x + 1) * 4]
+            pixels.extend((b, g, r, a))
+            if a == 0:
+                row[x // 8] |= 0x80 >> (x % 8)
+        mask.extend(row)
+    header = struct.pack("<IiiHHIIiiII", 40, size, size * 2, 1, 32,
+                         0, len(pixels) + len(mask), 0, 0, 0, 0)
+    return header + pixels + mask
+
+
+def desktop_icon_files():
+    sizes = (16, 24, 32, 48, 64, 128, 256)
+    data = [(size, icon_rgba(size)) for size in sizes]
+    png = icon_png(256, data[-1][1])
+    payloads = [icon_dib(size, rgba) if size < 256 else png
+                for size, rgba in data]
+    offset = 6 + 16 * len(sizes)
+    directory = bytearray(struct.pack("<HHH", 0, 1, len(sizes)))
+    for size, payload in zip(sizes, payloads):
+        directory.extend(struct.pack("<BBBBHHII", size % 256, size % 256,
+                                     0, 0, 1, 32, len(payload), offset))
+        offset += len(payload)
+    return png, bytes(directory) + b"".join(payloads)
+
+
+def patch_desktop_icons(source, role):
+    png, ico = desktop_icon_files()
+    assets = source / "flutter/assets"
+    (assets / "sindredesk_icon.png").write_bytes(png)
+    (assets / "sindredesk_icon.ico").write_bytes(ico)
+    # Windows resource icon and runtime icon use the same original artwork.
+    (source / "flutter/windows/runner/resources/app_icon.ico").write_bytes(ico)
+    windows = source / "flutter/windows/runner/win32_window.cpp"
+    patch(windows, lambda s: replace_once(s,
+        r'icon_path += L"data\\flutter_assets\\assets\\icon.ico";',
+        r'icon_path += L"data\\flutter_assets\\assets\\sindredesk_icon.ico";'))
+    patch(source / "src/platform/windows.rs", lambda s: replace_once(s,
+        r'const RELATIVE_ICON_PATH: &str = "data\\flutter_assets\\assets\\icon.ico";',
+        r'const RELATIVE_ICON_PATH: &str = "data\\flutter_assets\\assets\\sindredesk_icon.ico";'))
+    rc = source / "flutter/windows/runner/Runner.rc"
+    def resource_metadata(s):
+        for key, old, new in [
+            ("FileDescription", "RustDesk Remote Desktop", "SindreDesk " + role.title()),
+            ("OriginalFilename", "rustdesk.exe", "SindreDesk" + role.title() + ".exe"),
+            ("ProductName", "RustDesk", "SindreDesk"),
+        ]:
+            s = replace_once(s, f'VALUE "{key}", "{old}"', f'VALUE "{key}", "{new}"')
+        return s
+    patch(rc, resource_metadata)
+    linux = source / "flutter/linux/my_application.cc"
+    patch(linux, lambda s: replace_regex(s,
+        r'  // try setting icon for rustdesk, which uses the system cache\n.*?^  // Use a header bar',
+        '''  // Use the bundled SindreDesk icon, not the installed RustDesk icon theme.
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", NULL);
+  if (executable != NULL) {
+    g_autofree gchar* directory = g_path_get_dirname(executable);
+    g_autofree gchar* icon_path = g_build_filename(directory, "data", "flutter_assets",
+        "assets", "sindredesk_icon.png", NULL);
+    gtk_window_set_icon_from_file(window, icon_path, NULL);
+  }
+  // Use a header bar'''))
+    patch(source / "flutter/lib/common.dart", lambda s: replace_once(s,
+        "return Image.asset('assets/icon.png',",
+        "return Image.asset(isDesktop ? 'assets/sindredesk_icon.png' : 'assets/icon.png',"))
+    patch(source / "flutter/lib/desktop/widgets/tabbar_widget.dart", lambda s: replace_once(s,
+        '"RustDesk",\n                              style: TextStyle(fontSize: 13),',
+        '"SindreDesk",\n                              style: TextStyle(fontSize: 13),'))
+
+
 def patch_desktop_branding(source, role):
     suffix = role
     display = "SindreDesk " + role.title()
@@ -310,6 +431,7 @@ def prepare(source, role):
 
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
     patch_desktop_branding(source, role)
+    patch_desktop_icons(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
     for path in (ROOT / "client/flutter").glob("*.dart"):
