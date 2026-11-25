@@ -1,0 +1,14 @@
+[Unit]
+Description=SindreDesk Host
+After=network-online.target display-manager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/sindredesk-host/sindredesk-host --service
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

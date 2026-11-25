@@ -44,9 +44,16 @@ def patch_config(text, role):
     ]:
         text = replace_regex(text, rf"^pub fn {function}\(\) -> bool \{{\n.*?^\}}",
                              f"pub fn {function}() -> bool {{\n    {str(value).lower()}\n}}")
-    text = replace_regex(text,
-        r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;',
+    # Desktop Host native service/process names must match actual executable names.
+    app_name = ('''    pub static ref APP_NAME: RwLock<String> = RwLock::new(
+        (if cfg!(target_os = "windows") { "SindreDeskHost" }
+        else if cfg!(target_os = "linux") { "sindredesk-host" }
+        else { "SindreDesk Host" }).to_owned());''' if host else
         f'    pub static ref APP_NAME: RwLock<String> = RwLock::new("{name}".to_owned());')
+    text = replace_regex(text,
+        r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;', app_name)
+    if host:
+        text = patch_legacy_host_config(text)
     # 禁止旧配置、EXE 文件名及公共服务器自动回退；空配置仅使用不可用的本地端口。
     text = replace_regex(text,
         r'^    pub fn get_rendezvous_server\(\) -> String \{\n.*?^    \}',
@@ -67,6 +74,54 @@ def patch_config(text, role):
     text = replace_regex(text, r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;',
                          'pub const RENDEZVOUS_SERVERS: &[&str] = &["127.0.0.1:0"];')
     return text
+
+
+def patch_legacy_host_config(text):
+    # Migrate only the two native configuration files in the current account.
+    # The old files remain untouched, and a new existing config is never overwritten.
+    return replace_once(text,
+        '        Config::with_extension(Self::path(name))',
+        '''        let path = Config::with_extension(Self::path(name));
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if (suffix.is_empty() || suffix == "2") && !path.exists() {
+            if let Some(project) = directories_next::ProjectDirs::from("", "", "SindreDesk Host") {
+                let legacy = Config::with_extension(
+                    patch(project.config_dir().to_path_buf()).join(format!("SindreDesk Host{suffix}"))
+                );
+                if legacy != path && std::fs::symlink_metadata(&legacy)
+                    .map(|m| m.file_type().is_file()).unwrap_or(false) {
+                    if let Some(parent) = path.parent() {
+                        let tmp = parent.join(format!(".sindre-migrate-{:016x}", rand::random::<u64>()));
+                        let result = (|| -> std::io::Result<()> {
+                            std::fs::create_dir_all(parent)?;
+                            let mut options = std::fs::OpenOptions::new();
+                            options.write(true).create_new(true);
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::OpenOptionsExt;
+                                options.mode(0o600);
+                            }
+                            let mut output = options.open(&tmp)?;
+                            let copied = (|| -> std::io::Result<()> {
+                                std::io::copy(&mut std::fs::File::open(&legacy)?, &mut output)?;
+                                output.sync_all()?;
+                                Ok(())
+                            })();
+                            drop(output);
+                            let linked = copied.and_then(|_| std::fs::hard_link(&tmp, &path));
+                            let _ = std::fs::remove_file(&tmp);
+                            linked
+                        })();
+                        if result.is_err() && !path.exists() {
+                            // Do not lose the old machine identity when migration fails.
+                            log::warn!("SindreDesk Host config migration deferred");
+                            return legacy;
+                        }
+                    }
+                }
+            }
+        }
+        path''')
 
 
 def patch_client(text):
@@ -176,7 +231,45 @@ def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
     patch(source / "src/common.rs", patch_common)
+    if role == "host":
+        # Do not discover or reuse a legacy RustDesk installation.
+        patch(source / "src/platform/windows.rs", lambda s: replace_regex(s,
+            r'^fn get_valid_subkey\(\) -> String \{\n.*?^\}',
+            '''fn get_valid_subkey() -> String {
+    get_subkey(&crate::get_app_name(), false)
+}'''))
+        # Resolve the protected Program Files directory from HKLM, not a user environment variable.
+        patch(source / "src/platform/windows.rs", lambda s: replace_regex(s,
+            r'^fn get_default_install_path\(\) -> String \{\n.*?^\}',
+            '''fn get_default_install_path() -> String {
+    let pf = get_reg_of(r"HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion", "ProgramFilesDir");
+    let pf = if std::path::Path::new(&pf).is_absolute() { pf } else { r"C:\\Program Files".to_owned() };
+    format!(r"{}\\{}", pf, crate::get_app_name())
+}'''))
+        # Restrict the native Windows installer to its normal protected install path.
+        patch(source / "src/platform/windows.rs", lambda s: replace_once(s,
+            '    let mut path = path.trim_end_matches(\'\\\\\').to_owned();',
+            '    let mut path = String::new();'))
+        # The upstream Linux service copies both native configuration files to root.
+        patch(source / "src/platform/linux.rs", lambda s: replace_once(s,
+            'format!("cp -f {} {}; cp -f {} {};", src1, dst, src2, dst)',
+            'format!("install -d -m 700 {} && install -m 600 {} {} && install -m 600 {} {} &&", dst, src1, dst, src2, dst)'))
+
     patch(source / "src/flutter_ffi.rs", patch_android_native)
+    if role == "host":
+        patch(source / "src/flutter_ffi.rs", lambda s: replace_once(s,
+            'pub fn main_get_common(key: String) -> String {',
+            '''pub fn main_get_common(key: String) -> String {
+    if key == "sindre-installed-host" {
+        #[cfg(target_os = "windows")]
+        return (config::is_incoming_only() && crate::platform::is_cur_exe_the_installed()).to_string();
+        #[cfg(not(target_os = "windows"))]
+        return false.to_string();
+    }'''))
+        patch(source / "src/platform/linux.rs", lambda s: replace_once(s,
+            '"{cp} systemctl enable {app_name}; systemctl start {app_name};"',
+            '"{cp} systemctl enable {app_name} && systemctl start {app_name};"'))
+
     patch(source / "src/server.rs", lambda s: replace_once(s,
         '    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;',
         '''    if hbb_common::config::is_outgoing_only() || !stream.is_secured() {
@@ -195,7 +288,8 @@ def prepare(source, role):
     patch_desktop_branding(source, role)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
-    shutil.copy2(ROOT / "client/flutter/sindre_home.dart", dest / "sindre_home.dart")
+    for path in (ROOT / "client/flutter").glob("*.dart"):
+        shutil.copy2(path, dest / path.name)
 
 
 def main():

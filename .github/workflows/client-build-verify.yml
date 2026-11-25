@@ -217,6 +217,9 @@ jobs:
           app="sindredesk-${{ matrix.role }}"
           test -x "build/linux/x64/release/bundle/$app"
           test -s build/linux/x64/release/bundle/lib/librustdesk.so
+          if [[ "${{ matrix.role }}" == host ]]; then
+            cp "$GITHUB_WORKSPACE/deploy/sindredesk-host.service" build/linux/x64/release/bundle/
+          fi
       - name: Install custom RustDesk Flutter engine (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
