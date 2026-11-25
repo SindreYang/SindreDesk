@@ -185,6 +185,19 @@ class _SindreHomeState extends State<SindreHome> {
     }
   }
 
+  void _onIdChanged(String value) {
+    final address = value.replaceAll(' ', '').trim();
+    if (_isPrivateLanAddress(address)) {
+      final saved = bind.mainGetOptionSync(
+        key: 'sindre-lan-peer-fingerprint:$address',
+      );
+      if (saved.isNotEmpty) _fingerprint.text = saved;
+    } else {
+      _fingerprint.clear();
+    }
+    setState(() {});
+  }
+
   void _scanLan() {
     if (!mounted || host) return;
     bind.mainLoadLanPeers();
@@ -327,7 +340,7 @@ class _SindreHomeState extends State<SindreHome> {
       final ready = configured && (host ? status > 0 : _reachable == true);
       final failed = host ? status < 0 : _reachable == false;
       final label = !configured
-          ? (host ? '局域网直连 · 未配置服务器' : '局域网可用 · 未配置服务器') :
+          ? (host ? '未配置服务器 · 局域网直连' : '未配置服务器 · 可扫描局域网') :
           ready ? (host ? '服务器已连接' : '服务器可达') :
           failed ? (host ? '服务器未就绪' : '服务器不可达') :
           host ? '正在连接服务器' : '正在检测服务器';
@@ -377,7 +390,7 @@ class _SindreHomeState extends State<SindreHome> {
           border: OutlineInputBorder(),
         ),
         keyboardType: TextInputType.text,
-        onChanged: (_) => setState(() {}),
+        onChanged: _onIdChanged,
       ),
       if (_isPrivateLanAddress(_id.text)) ...[
         const SizedBox(height: 12),
