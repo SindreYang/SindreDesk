@@ -39,8 +39,11 @@ pub(crate) fn check(peer: &str, key: &[u8]) -> ResultType<()> {
 }
 
 pub(crate) fn remember(peer: &str, key: &[u8]) -> ResultType<()> {
-    let target = path(peer)?;
-    if check_path(&target, key)? { return Ok(()); }
+    remember_path(&path(peer)?, key)
+}
+
+fn remember_path(target: &std::path::Path, key: &[u8]) -> ResultType<()> {
+    if check_path(target, key)? { return Ok(()); }
     let parent = target.parent().ok_or_else(|| anyhow!("LAN trust path unavailable"))?;
     fs::create_dir_all(parent)?;
     // Publish only a complete record, never overwrite a concurrently trusted key.
@@ -50,10 +53,10 @@ pub(crate) fn remember(peer: &str, key: &[u8]) -> ResultType<()> {
         file.write_all(key)?;
         file.sync_all()?;
         drop(file);
-        match fs::hard_link(&tmp, &target) {
+        match fs::hard_link(&tmp, target) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if check_path(&target, key)? { Ok(()) } else { Err(e.into()) }
+                if check_path(target, key)? { Ok(()) } else { Err(e.into()) }
             }
             Err(e) => Err(e.into()),
         }
@@ -70,5 +73,33 @@ pub(crate) fn clear() -> ResultType<()> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_login_pins_key_and_changed_key_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("sindre-trust-test-{}", uuid::Uuid::new_v4()));
+        let target = dir.join("192.168.5.10.key");
+        let original = [1u8; 32];
+        let changed = [2u8; 32];
+        let result = (|| -> ResultType<()> {
+            assert!(!check_path(&target, &original)?);
+            assert!(!target.exists());
+            assert!(remember_path(&target, &[1u8; 31]).is_err());
+            assert!(!target.exists());
+            remember_path(&target, &original)?;
+            assert!(check_path(&target, &original)?);
+            remember_path(&target, &original)?;
+            assert!(check_path(&target, &changed).is_err());
+            assert!(remember_path(&target, &changed).is_err());
+            assert_eq!(fs::read(&target)?, original.to_vec());
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(dir);
+        result.unwrap();
     }
 }

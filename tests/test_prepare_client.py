@@ -251,10 +251,21 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("Some(host_sign_pk)", source)
         self.assertIn("if !conn.is_secured()", source)
         trust = (ROOT / "client/native/sindre_trust.rs").read_text()
-        self.assertIn("fs::hard_link(&tmp, &target)", trust)
+        self.assertIn("fs::hard_link(&tmp, target)", trust)
         self.assertIn("create_new(true)", trust)
         self.assertIn("Ok(saved) if saved == key", trust)
         self.assertNotIn("sindre-lan-peer-fingerprint:", ui)
+
+    def test_lan_trust_session_patch(self):
+        fixture = ("    sent_close_reason: bool,\n"
+                   "            sent_close_reason: false,\n"
+                   "                let is_secured = peer.is_secured();\n"
+                   "                    Some(login_response::Union::PeerInfo(pi)) => {")
+        result = module.patch_lan_trust_session(fixture)
+        self.assertIn("sindre_lan_key: Option<Vec<u8>>", result)
+        self.assertIn("pk.clone()", result)
+        self.assertIn("if let Some(key) = self.sindre_lan_key.take()", result)
+        self.assertIn("sindre_trust::remember", result)
 
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
