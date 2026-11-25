@@ -316,7 +316,7 @@ class _SindreHomeState extends State<SindreHome> {
                 dense: true,
                 title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname),
                 subtitle: Text(
-                  '${peer.ip}:21118\n${validFingerprint(peer.fingerprint) ? peer.fingerprint : '此设备不支持安全直连'}',
+                  "${peer.ip}:21118\n${validFingerprint(peer.fingerprint) ? peer.fingerprint : '此设备不支持安全直连'}",
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
