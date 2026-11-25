@@ -283,13 +283,13 @@ class PrepareClientTests(unittest.TestCase):
     def test_role_titles_and_settings_credit(self):
         source = (ROOT / "scripts/prepare-client.py").read_text()
         ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
-        self.assertIn("title: host ? 'SindreDesk 客户端（被控端）' : 'SindreDesk 控制端'", source)
-        self.assertIn("windowManager.setTitle(host ? 'SindreDesk 客户端（被控端）' : 'SindreDesk 控制端')", source)
+        self.assertIn("title: host ? '被控端' : '控制端'", source)
+        self.assertIn("windowManager.setTitle(host ? '被控端' : '控制端')", source)
         self.assertIn("Text(host ? '客户端（被控端）' : '控制端'", ui)
         self.assertIn("Expanded(child: Text('基于SindreDesk研发'", ui)
         self.assertIn("fontSize: 10", ui)
-        for name, label in (("host-home.svg", "SindreDesk 客户端（被控端）"),
-                            ("client-home.svg", "SindreDesk 控制端"),
+        for name, label in (("host-home.svg", "被控端"),
+                            ("client-home.svg", "控制端"),
                             ("host-settings.svg", "基于SindreDesk研发")):
             self.assertIn(label, (ROOT / "docs/images" / name).read_text(encoding="utf-8"))
 
