@@ -623,12 +623,12 @@ def patch_main(text):
     center: true,
     alwaysOnTop: alwaysOnTop,
     titleBarStyle: TitleBarStyle.normal,
-    title: host ? 'SindreDesk Host' : 'SindreDesk Client',
+    title: host ? 'SindreDesk 客户端（被控端）' : 'SindreDesk 控制端',
   );''')
     text = replace_once(text, '    await restoreWindowPosition(WindowType.Main);',
         '    // Compact main window: do not restore obsolete oversized bounds.\n    await windowManager.center();')
     text = replace_once(text, '    windowManager.setTitle(getWindowName());',
-        "    windowManager.setTitle(host ? 'SindreDesk Host' : 'SindreDesk Client');")
+        "    windowManager.setTitle(host ? 'SindreDesk 客户端（被控端）' : 'SindreDesk 控制端');")
     text = replace_once(text, '    setResizable(!bind.isIncomingOnly());', '    setResizable(true);')
     return text
 

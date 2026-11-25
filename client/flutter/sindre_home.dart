@@ -337,7 +337,7 @@ class _SindreHomeState extends State<SindreHome> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(host ? '本机设备' : '远程控制',
+                Text(host ? '客户端（被控端）' : '控制端',
                   style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(host ? '允许其他设备连接本机' : '连接其他设备',
@@ -682,9 +682,21 @@ class _ServerSettingsState extends State<_ServerSettings> {
       ],
     )),
     actions: [
-      TextButton(onPressed: _busy ? null : () => Navigator.of(context).pop(false),
-        child: const Text('取消')),
-      FilledButton(onPressed: _busy ? null : _save, child: const Text('保存')),
+      Row(children: [
+        Expanded(child: Text('基于SindreDesk研发',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            fontSize: 10,
+            fontWeight: FontWeight.normal,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ))),
+        const SizedBox(width: 8),
+        TextButton(onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消')),
+        const SizedBox(width: 8),
+        FilledButton(onPressed: _busy ? null : _save, child: const Text('保存')),
+      ]),
     ],
   );
 }

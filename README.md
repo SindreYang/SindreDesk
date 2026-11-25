@@ -2,8 +2,8 @@
 
 轻量远程控制工具。无需注册账号，电脑和安卓手机均可使用。
 
-- **Host（被控端）**：安装在需要被控制的设备上。
-- **Client（控制端）**：安装在用来操作其他设备的设备上。
+- **客户端（被控端 / Host）**：安装在需要被控制的设备上。
+- **控制端（Client）**：安装在用来操作其他设备的设备上。
 - **Server（服务器）**：仅在跨网络使用连接码时需要自行部署。
 
 > 当前为开发测试版。新界面和固定密码尚需跨平台构建与真机验收；请勿将其用于未经验证的生产或无人值守场景。
@@ -11,10 +11,10 @@
 ## 界面预览
 
 <table>
-<tr><th>Host（被控端）</th><th>Client（控制端）</th></tr>
+<tr><th>客户端（被控端）</th><th>控制端</th></tr>
 <tr>
-<td><img src="docs/images/host-home.svg" alt="Host 首页：本机连接码、固定密码、局域网 IP" width="340"></td>
-<td><img src="docs/images/client-home.svg" alt="Client 首页：输入 IP 或连接码及密码" width="340"></td>
+<td><img src="docs/images/host-home.svg" alt="客户端（被控端）首页：本机连接码、固定密码、局域网 IP" width="340"></td>
+<td><img src="docs/images/client-home.svg" alt="控制端首页：输入 IP 或连接码及密码" width="340"></td>
 </tr>
 </table>
 
@@ -24,7 +24,7 @@
 
 前往 [版本下载](https://github.com/SindreYang/SindreDesk/releases)，选择对应设备和角色。
 
-| 平台 | 被控端 Host | 控制端 Client |
+| 平台 | 客户端（被控端 / Host） | 控制端（Client） |
 | --- | --- | --- |
 | Windows 10/11 x64 | SindreDeskHost-windows-x64.zip | SindreDeskClient-windows-x64.zip |
 | Linux x64 | SindreDeskHost-linux-x64.tar.gz | SindreDeskClient-linux-x64.tar.gz |
@@ -40,9 +40,9 @@
 
 两台设备连接同一个可信 Wi-Fi 或有线网络，不需要服务器。
 
-1. 在被控设备打开 **Host**。首页显示本机连接码、固定密码和右下角的局域网 IP。
+1. 在被控设备打开 **客户端（Host）**。首页显示本机连接码、固定密码和右下角的局域网 IP。
 2. 如果被控设备是 Android，按页面提示开启共享并确认系统屏幕捕获授权；需要远程触摸时开启无障碍权限。
-3. 在另一台设备打开 **Client**，从局域网设备列表选择 Host，或输入 Host 右下角的 IP，例如 `192.168.5.10`。
+3. 在另一台设备打开 **控制端（Client）**，从局域网设备列表选择 Host，或输入 Host 右下角的 IP，例如 `192.168.5.10`。
 4. 输入 Host 显示的固定密码，点击「连接设备」。
 5. 使用结束后退出远程会话；Host 可从连接管理窗口断开，Android 也可停止共享。
 
@@ -52,9 +52,9 @@
 
 若局域网加密握手失败，可在 Host 和 Client 的右上角设置中分别开启「局域网兼容模式」。之后仍只输入 IP 和固定密码，软件先尝试加密连接，失败后自动尝试一次非加密连接。开关默认关闭，设置后立即生效；该模式仅适用于可信私有 IPv4 局域网，不影响连接码或跨网络连接。非加密会话可能被监听或篡改，测试结束后请关闭。已知设备身份变化或密码错误不会触发降级。
 
-<p><img src="docs/images/host-settings.svg" alt="Host 设置：服务器配置、局域网兼容模式及系统级开机自启" width="340"></p>
+<p><img src="docs/images/host-settings.svg" alt="客户端设置：服务器配置、局域网兼容模式及系统级开机自启" width="340"></p>
 
-*Host 设置界面示意（兼容模式默认关闭）。Client 设置同样提供服务器配置和局域网兼容模式。*
+*客户端设置界面示意（兼容模式默认关闭）。控制端设置同样提供服务器配置和局域网兼容模式。*
 
 ## 3. 不同网络连接
 
