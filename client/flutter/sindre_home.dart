@@ -539,6 +539,24 @@ class _ServerSettingsState extends State<_ServerSettings> {
   final _key = TextEditingController(text: bind.mainGetOptionSync(key: 'key'));
   bool _busy = false;
   String? _error;
+  bool _lanCompat = bind.mainGetOptionSync(key: 'sindre-lan-compat') == 'Y';
+
+  Future<void> _setLanCompat(bool enabled) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await bind.mainSetOption(key: 'sindre-lan-compat', value: enabled ? 'Y' : '');
+      final saved = bind.mainGetOptionSync(key: 'sindre-lan-compat') == 'Y';
+      if (mounted) setState(() {
+        _lanCompat = saved;
+        _error = saved == enabled ? null : '局域网兼容模式保存失败';
+      });
+    } catch (_) {
+      if (mounted) setState(() => _error = '局域网兼容模式保存失败');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -644,6 +662,14 @@ class _ServerSettingsState extends State<_ServerSettings> {
           decoration: const InputDecoration(labelText: '服务器公钥')),
         if (_error != null) Padding(
           padding: const EdgeInsets.only(top: 12), child: Text(_error!)),
+        const Divider(height: 24),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('局域网兼容模式'),
+          subtitle: const Text('测试用：加密握手失败后允许非加密直连，两端均需开启'),
+          value: _lanCompat,
+          onChanged: _busy ? null : _setLanCompat,
+        ),
         if (!widget.host) ...[
           const Divider(height: 24),
           TextButton(onPressed: _busy ? null : _clearLanTrust,
