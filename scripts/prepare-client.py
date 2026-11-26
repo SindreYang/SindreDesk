@@ -206,7 +206,7 @@ fn sindre_password_state() -> String {
         return "missing".to_owned();
     }
     let cached = LocalConfig::get_option("sindre-fixed-password-encrypted");
-    let Ok(cipher) = hbb_common::base64::decode(cached, hbb_common::base64::Variant::Original) else {
+    let Ok(cipher) = hbb_common::sodiumoxide::base64::decode(cached, hbb_common::sodiumoxide::base64::Variant::Original) else {
         return "legacy".to_owned();
     };
     let Some(plain) = sindre_decrypt_password(&cipher) else {
@@ -232,7 +232,7 @@ pub fn main_set_permanent_password_with_result(password: String) -> bool {
     let Some(cipher) = sindre_encrypt_password(&password) else {
         return false;
     };
-    let encoded = hbb_common::base64::encode(cipher, hbb_common::base64::Variant::Original);
+    let encoded = hbb_common::sodiumoxide::base64::encode(cipher, hbb_common::sodiumoxide::base64::Variant::Original);
     if !ui_interface::set_permanent_password_with_result(password) {
         return false;
     }

@@ -113,6 +113,10 @@ class PrepareClientTests(unittest.TestCase):
         result = module.patch_fixed_password(source)
         self.assertIn('sindre_encrypt_password(&password)', result)
         self.assertIn('sindre_decrypt_password(&cipher)', result)
+        # hbb_common re-exports base64 0.22, whereas Variant belongs to sodiumoxide.
+        self.assertIn('hbb_common::sodiumoxide::base64::decode(cached, hbb_common::sodiumoxide::base64::Variant::Original)', result)
+        self.assertIn('hbb_common::sodiumoxide::base64::encode(cipher, hbb_common::sodiumoxide::base64::Variant::Original)', result)
+        self.assertNotIn('hbb_common::base64::Variant', result)
         self.assertIn('secretbox::gen_nonce()', result)
         self.assertIn('secretbox::seal', result)
         self.assertIn('secretbox::open', result)
