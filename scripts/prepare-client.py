@@ -828,10 +828,105 @@ def patch_desktop_icons(source, role):
   // Use a header bar'''))
     patch(source / "flutter/lib/common.dart", lambda s: replace_once(s,
         "return Image.asset('assets/icon.png',",
-        "return Image.asset(isDesktop ? 'assets/sindredesk_icon.png' : 'assets/icon.png',"))
+        "return Image.asset('assets/sindredesk_icon.png',"))
+    # 避免 Flutter 加载失败时回退到旧 RustDesk Logo。
+    patch(source / "flutter/lib/common.dart", lambda s: replace_once(s,
+        "'assets/icon.svg',",
+        "'assets/sindredesk_icon.svg',"))
+    (assets / "sindredesk_icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        '<rect x="5" y="5" width="90" height="90" rx="13" fill="#1668d3"/>'
+        '<path d="M25 28h50v34H25zM50 62v15M34 77h32M36 44h28m-9-10 10 10-10 10" '
+        'fill="none" stroke="white" stroke-width="6" stroke-linejoin="round"/>'
+        '</svg>', encoding="utf-8")
     patch(source / "flutter/lib/desktop/widgets/tabbar_widget.dart", lambda s: replace_once(s,
         '"RustDesk",\n                              style: TextStyle(fontSize: 13),',
         '"SindreDesk",\n                              style: TextStyle(fontSize: 13),'))
+
+
+def android_glyph_rgba(size, scale):
+    """从统一图标提取白色图形，适用于 Adaptive Icon 和单色通知。"""
+    inner = max(1, round(size * scale))
+    original = icon_rgba(inner)
+    result = bytearray(size * size * 4)
+    offset = (size - inner) // 2
+    for y in range(inner):
+        for x in range(inner):
+            red, _, _, alpha = original[(y * inner + x) * 4:(y * inner + x + 1) * 4]
+            # 蓝色底为 R=22；白色图形为 R=255。保留抗锯齿透明度。
+            opacity = round(max(0, red - 22) * alpha / 233)
+            index = ((y + offset) * size + x + offset) * 4
+            result[index:index + 4] = bytes((255, 255, 255, opacity))
+    return bytes(result)
+
+
+def android_round_rgba(size):
+    # Android 7 的圆形图标单独生成，不能依赖系统裁剪普通图标。
+    glyph = android_glyph_rgba(size, 1.0)
+    result = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            index = (y * size + x) * 4
+            # 4x4 采样圆形边缘，保证透明且抗锯齿。
+            coverage = sum((x + (i + 0.5) / 4 - size / 2) ** 2 +
+                           (y + (j + 0.5) / 4 - size / 2) ** 2 <= (size / 2) ** 2
+                           for i in range(4) for j in range(4))
+            opacity = glyph[index + 3]
+            rgb = tuple((color * (255 - opacity) + 255 * opacity) // 255
+                        for color in (22, 104, 211))
+            result[index:index + 4] = bytes((*rgb, round(255 * coverage / 16)))
+    return bytes(result)
+
+
+def patch_android_icons(source):
+    """完整替换 APK 资源；自适应图标使用留白的独立透明前景。"""
+    res = source / "flutter/android/app/src/main/res"
+    for density, factor in (("mdpi", 1), ("hdpi", 1.5), ("xhdpi", 2),
+                            ("xxhdpi", 3), ("xxxhdpi", 4)):
+        directory = res / f"mipmap-{density}"
+        launcher_size = round(48 * factor)
+        foreground_size = round(108 * factor)
+        notification_size = round(24 * factor)
+        launcher = icon_png(launcher_size, icon_rgba(launcher_size))
+        (directory / "ic_launcher.png").write_bytes(launcher)
+        (directory / "ic_launcher_round.png").write_bytes(
+            icon_png(launcher_size, android_round_rgba(launcher_size)))
+        (directory / "ic_launcher_foreground.png").write_bytes(
+            icon_png(foreground_size, android_glyph_rgba(foreground_size, 0.80)))
+        (directory / "ic_stat_logo.png").write_bytes(
+            icon_png(notification_size, android_glyph_rgba(notification_size, 1.0)))
+    patch(res / "values/ic_launcher_background.xml", lambda s: replace_once(
+        s, "#ffffff", "#1668d3"))
+
+
+def patch_android_manifest(text, role):
+    label = "SindreDesk 被控端" if role == "host" else "SindreDesk 控制端"
+    text = replace_once(text, 'android:label="RustDesk"', f'android:label="{label}"')
+    text = replace_once(text, 'android:label="RustDesk Input"', 'android:label="SindreDesk 远程触控"')
+    text = replace_once(text, 'android:roundIcon="@mipmap/ic_launcher"',
+                        'android:roundIcon="@mipmap/ic_launcher_round"')
+    # 首页只接受手工输入/发现设备，移除原版 RustDesk 的公共 URL 处理器。
+    text = replace_regex(text, r'            <!-- Intent for deep linking-->\n            <intent-filter>.*?</intent-filter>\n', '')
+    if role == "client":
+        # 控制端无需开启被控服务，包级禁用组件；仍保留远程控制需要的权限入口。
+        for component in (".BootReceiver", ".InputService", ".MainService", ".FloatingWindowService"):
+            text = replace_once(text,
+                f'android:name="{component}"\n            android:enabled="true"',
+                f'android:name="{component}"\n            android:enabled="false"')
+        text = replace_once(text, 'android:name=".PermissionRequestTransparentActivity"',
+            'android:name=".PermissionRequestTransparentActivity"\n            android:enabled="false"')
+    return text
+
+
+def patch_android_activity(text, role):
+    if role != "client":
+        return text
+    return replace_once(text, '                "init_service" -> {',
+        '''                "init_service" -> {
+                    if (activity.packageName == "com.sindre.desk.client") {
+                        result.success(false)
+                        return@setMethodCallHandler
+                    }''')
 
 
 def patch_desktop_branding(source, role):
@@ -848,13 +943,16 @@ def patch_desktop_branding(source, role):
         s, 'set(BINARY_NAME "rustdesk")',
         f'set(BINARY_NAME "SindreDesk{role.title()}")'))
     manifest = source / "flutter/android/app/src/main/AndroidManifest.xml"
-    patch(manifest, lambda s: s.replace(
-        'android:label="RustDesk"', f'android:label="{display}"'
-    ).replace('android:label="RustDesk Input"', f'android:label="{display} Input"'))
+    patch(manifest, lambda s: patch_android_manifest(s, role))
     kotlin = source / "flutter/android/app/src/main/kotlin"
     for path in kotlin.rglob("*.kt"):
         text = path.read_text(encoding="utf-8")
         text = text.replace('"RustDesk"', f'"{display}"')
+        text = text.replace('"RustDesk Service"', '"SindreDesk 服务"')
+        text = text.replace('"RustDesk Service Channel"', '"SindreDesk 服务通知"')
+        text = text.replace('"RustDesk is Open"', '"SindreDesk 已启动"')
+        if path.name == "MainActivity.kt":
+            text = patch_android_activity(text, role)
         path.write_text(text, encoding="utf-8")
     strings = source / "flutter/android/app/src/main/res/values/strings.xml"
     if strings.exists():
@@ -1014,6 +1112,7 @@ def prepare(source, role):
     patch(source / "flutter/android/app/build.gradle", lambda s: patch_gradle(s, role))
     patch_desktop_branding(source, role)
     patch_desktop_icons(source, role)
+    patch_android_icons(source)
     dest = source / "flutter/lib/sindre"
     dest.mkdir()
     for path in (ROOT / "client/flutter").glob("*.dart"):

@@ -34,7 +34,7 @@
 
 - Windows：下载 ZIP，完整解压到一个新目录，再双击 `SindreDeskHost.exe` 或 `SindreDeskClient.exe`。请保留同目录的 DLL 和资源文件，不要只复制 EXE。升级时解压到新目录，避免混用旧文件。
 - Linux：解压后运行 `./sindredesk-host` 或 `./sindredesk-client`（必要时先添加执行权限）。
-- Android：安装 APK；文件名带 `-test.apk` 表示测试签名，仅供测试。签名不兼容时可能需要先卸载旧版，请先备份配置。
+- Android：被控端和控制端桌面名称分别为「SindreDesk 被控端」「SindreDesk 控制端」，应用、圆形、自适应与通知栏图标使用统一 SindreDesk 标识；原版 RustDesk 可独立安装。安装 APK；文件名带 `-test.apk` 表示测试签名，仅供测试。签名不兼容时可能需要先卸载旧版，请先备份配置。
 
 未提供 macOS、iOS、32 位 Android 或 ARM64 桌面版本。若该版本没有对应附件，可查看 [构建记录](https://github.com/SindreYang/SindreDesk/actions)；没有成功构建的包暂不可下载。Windows 提供 ZIP 便携版，不是 MSI 安装器。
 

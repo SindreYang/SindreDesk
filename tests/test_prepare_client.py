@@ -253,6 +253,61 @@ if p.cmd == "pong" {
         self.assertIn("_connect(target: peer.ip)", ui)
         self.assertIn("password: password.isEmpty ? null : password", ui)
 
+    def test_android_icon_and_role_resources(self):
+        import struct
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            res = Path(tmp) / "flutter/android/app/src/main/res"
+            for density in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
+                (res / f"mipmap-{density}").mkdir(parents=True)
+            (res / "values").mkdir()
+            (res / "values/ic_launcher_background.xml").write_text("#ffffff")
+            module.patch_android_icons(Path(tmp))
+            for density, scale in (("mdpi", 1), ("hdpi", 1.5), ("xhdpi", 2),
+                                   ("xxhdpi", 3), ("xxxhdpi", 4)):
+                for name, size in (("ic_launcher", 48), ("ic_launcher_round", 48),
+                                   ("ic_launcher_foreground", 108), ("ic_stat_logo", 24)):
+                    png = (res / f"mipmap-{density}/{name}.png").read_bytes()
+                    self.assertEqual(png[:8], bytes.fromhex("89504e470d0a1a0a"))
+                    self.assertEqual(struct.unpack_from(">II", png, 16),
+                                     (round(size * scale), round(size * scale)))
+            self.assertIn("#1668d3", (res / "values/ic_launcher_background.xml").read_text())
+        round_icon = module.android_round_rgba(48)
+        self.assertEqual(round_icon[3], 0)
+        self.assertEqual(round_icon[(24 * 48 + 24) * 4 + 3], 255)
+        glyph = module.android_glyph_rgba(24, 1.0)
+        self.assertIn(0, glyph[3::4])
+        self.assertIn(255, glyph[3::4])
+        self.assertTrue(all(glyph[i:i+3] == bytes((255, 255, 255))
+                            for i in range(0, len(glyph), 4) if glyph[i+3]))
+        manifest = '''android:label="RustDesk"
+android:label="RustDesk Input"
+android:roundIcon="@mipmap/ic_launcher"
+            <!-- Intent for deep linking-->
+            <intent-filter><data android:scheme="rustdesk" /></intent-filter>
+android:name=".BootReceiver"
+            android:enabled="true"
+android:name=".InputService"
+            android:enabled="true"
+android:name=".MainService"
+            android:enabled="true"
+android:name=".FloatingWindowService"
+            android:enabled="true"
+android:name=".PermissionRequestTransparentActivity"'''
+        host = module.patch_android_manifest(manifest, "host")
+        client = module.patch_android_manifest(manifest, "client")
+        self.assertIn("SindreDesk 被控端", host)
+        self.assertIn("SindreDesk 控制端", client)
+        self.assertIn('android:roundIcon="@mipmap/ic_launcher_round"', client)
+        self.assertNotIn('android:scheme="rustdesk"', host)
+        self.assertNotIn('android:scheme="rustdesk"', client)
+        self.assertEqual(host.count('android:enabled="false"'), 0)
+        self.assertEqual(client.count('android:enabled="false"'), 5)
+        activity = '                "init_service" -> {'
+        self.assertEqual(module.patch_android_activity(activity, "host"), activity)
+        self.assertIn('activity.packageName == "com.sindre.desk.client"',
+                      module.patch_android_activity(activity, "client"))
+
     def test_desktop_icon_format(self):
         import struct
         png, ico = module.desktop_icon_files()
