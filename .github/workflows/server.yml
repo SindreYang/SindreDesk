@@ -85,5 +85,6 @@ jobs:
           chmod +x package/SindreDeskServer
           (cd package && sha256sum -c SHA256SUMS)
           tar -C package -czf SindreDeskServer-linux-x64.tar.gz .
-          sha256sum SindreDeskServer-linux-x64.tar.gz > SHA256SUMS-server
-          gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz SHA256SUMS-server --repo "$GH_REPO" --clobber
+          # 保留内部二进制校验文件，发布包哈希仅记录于 Actions 日志。
+          sha256sum SindreDeskServer-linux-x64.tar.gz
+          gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz --repo "$GH_REPO" --clobber
