@@ -19,7 +19,7 @@
 | SindreDesk-client-linux-x64-ci | Linux Client 完整运行目录 |
 | SindreDeskServer-linux-x64-ci | 服务端二进制与 SHA256SUMS |
 
-客户端工作流先完成预检及共享 Bridge，然后并行构建 Windows Host / Client（最多两项）。两项均成功后才启动 Linux / Android 四项（最多两项并行）；Windows 失败时跳过后续平台，以优先定位常用平台问题、减少无效构建。所有六项通过后才上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。Release 仅上传程序包（ZIP、tar.gz、APK），不生成独立 SHA256SUMS 或开发/签名说明文本附件；包哈希保留在 Actions 日志中，服务端压缩包内部保留二进制校验文件 SHA256SUMS。下载前确认对应任务成功，调试签名 APK 仅供测试。未配置正式签名的 0.x 开发版或预发行版 APK 使用调试签名，Release 文件名带 -test；其他稳定版必须使用正式签名。构建检查 APK 签名、角色包名及 arm64-v8a 原生库。
+客户端工作流先完成预检及共享 Bridge，然后并行构建 Windows Host / Client（最多两项）。两项均成功后才启动 Linux / Android 四项（最多两项并行）；Windows 失败时跳过后续平台，以优先定位常用平台问题、减少无效构建。所有六项通过后才上传客户端 Release 附件；服务端独立通过测试后上传服务端附件。Release 仅上传程序包（ZIP、tar.gz、APK），不生成独立 SHA256SUMS 或开发/签名说明文本附件；包哈希保留在 Actions 日志中，服务端压缩包内部保留二进制校验文件 SHA256SUMS。下载前确认对应任务成功，调试签名 APK 仅供测试。未配置正式签名的 0.x 开发版或预发行版 APK 使用调试签名，构建阶段直接将调试签名 APK 命名为 -test.apk，不再生成签名标记文本文件；其他稳定版必须使用正式签名。构建检查 APK 签名、角色包名及 arm64-v8a 原生库。
 
 ## 8. 开发与验收
 
