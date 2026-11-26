@@ -298,9 +298,10 @@ jobs:
           test "$package" = "com.sindre.desk.${{ matrix.role }}"
           python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
           if [[ "${{ matrix.role }}" == host ]]; then app="SindreDeskHost"; else app="SindreDeskClient"; fi
-          cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
           if [[ "${ANDROID_TEST_SIGNING:-false}" == true ]]; then
-            printf "Debug signing; installation testing only.\n" > "$GITHUB_WORKSPACE/$app-TEST-SIGNING.txt"
+            cp "$apk" "$GITHUB_WORKSPACE/$app-test.apk"
+          else
+            cp "$apk" "$GITHUB_WORKSPACE/$app.apk"
           fi
       - name: Remove Android signing material
         if: always() && matrix.platform == 'android'
@@ -324,7 +325,7 @@ jobs:
           name: SindreDesk-${{ matrix.role }}-android-arm64-ci
           path: |
             SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
-            SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}-TEST-SIGNING.txt
+            SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}-test.apk
           if-no-files-found: error
   build_other:
     needs: build_windows
@@ -369,10 +370,14 @@ jobs:
             tar -C "packages/SindreDesk-$role-linux-x64-ci" -czf "release/$app-linux-x64.tar.gz" .
             (cd "packages/SindreDesk-$role-windows-x64-ci" && zip -qr "../../release/$app-windows-x64.zip" .)
             android="packages/SindreDesk-$role-android-arm64-ci"
-            if [[ -f "$android/$app-TEST-SIGNING.txt" ]]; then
-              cp "$android/$app.apk" "release/$app-test.apk"
-            else
+            # APK 在构建阶段已经按签名类型命名；每个角色必须恰好一个包。
+            if [[ -f "$android/$app-test.apk" && ! -e "$android/$app.apk" ]]; then
+              cp "$android/$app-test.apk" release/
+            elif [[ -f "$android/$app.apk" && ! -e "$android/$app-test.apk" ]]; then
               cp "$android/$app.apk" release/
+            else
+              echo "Expected exactly one Android APK for $app" >&2
+              exit 1
             fi
           done
           # 校验值输出到 Actions 日志，不再生成独立 Release 文本附件。
