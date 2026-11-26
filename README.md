@@ -24,7 +24,7 @@
 
 ## 1. 下载并安装
 
-前往 [版本下载](https://github.com/SindreYang/SindreDesk/releases)，选择对应设备和角色。
+前往 [版本下载](https://github.com/SindreYang/SindreDesk/releases)，选择对应设备和角色。Release 只上传程序包，调试签名 APK 通过 `-test.apk` 文件名区分，包哈希见 Actions 日志。
 
 | 平台 | 客户端（被控端 / Host） | 控制端（Client） |
 | --- | --- | --- |

@@ -371,13 +371,10 @@ jobs:
             android="packages/SindreDesk-$role-android-arm64-ci"
             if [[ -f "$android/$app-TEST-SIGNING.txt" ]]; then
               cp "$android/$app.apk" "release/$app-test.apk"
-              cp "$android/$app-TEST-SIGNING.txt" release/
             else
               cp "$android/$app.apk" release/
             fi
           done
-          (cd release && sha256sum *.apk *.zip *.tar.gz > SHA256SUMS-clients)
-          if [[ "$RELEASE_TAG" =~ ^v?0\.[0-9]+\.[0-9]+([+-].*)?$ ]]; then
-            printf "0.x development build; not production validated.\n" > release/DEVELOPMENT-BUILD.txt
-          fi
-          gh release upload "$RELEASE_TAG" release/* --repo "$GH_REPO" --clobber
+          # 校验值输出到 Actions 日志，不再生成独立 Release 文本附件。
+          (cd release && sha256sum *.apk *.zip *.tar.gz)
+          gh release upload "$RELEASE_TAG" release/*.apk release/*.zip release/*.tar.gz --repo "$GH_REPO" --clobber

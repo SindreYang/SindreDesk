@@ -401,6 +401,21 @@ android:name=".PermissionRequestTransparentActivity"'''
                             ("host-settings.svg", "基于SindreDesk研发--开源且免费")):
             self.assertIn(label, (ROOT / "docs/images" / name).read_text(encoding="utf-8"))
 
+    def test_release_packages_only(self):
+        client = (ROOT / ".github/workflows/client-build-verify.yml").read_text(encoding="utf-8")
+        server = (ROOT / ".github/workflows/server.yml").read_text(encoding="utf-8")
+        publish = client.split("  publish:\n", 1)[1]
+        self.assertIn("release/*.apk release/*.zip release/*.tar.gz", publish)
+        self.assertNotIn("release/* --repo", publish)
+        self.assertNotIn("SHA256SUMS-clients", publish)
+        self.assertNotIn("DEVELOPMENT-BUILD.txt", publish)
+        self.assertNotIn('-TEST-SIGNING.txt" release/', publish)
+        self.assertIn('-TEST-SIGNING.txt" ]]; then', publish)
+        self.assertIn('-test.apk"', publish)
+        self.assertNotIn("SHA256SUMS-server", server)
+        self.assertIn("sha256sum -c SHA256SUMS", server)
+        self.assertIn('gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz --repo', server)
+
     def test_windows_build_priority(self):
         workflow = (ROOT / ".github/workflows/client-build-verify.yml").read_text(encoding="utf-8")
         windows = workflow.split("  build_windows:\n", 1)[1].split("  build_other:\n", 1)[0]
