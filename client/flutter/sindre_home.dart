@@ -80,8 +80,9 @@ Widget _connectionValue(BuildContext context, String title, String value,
   ]);
 }
 
-Widget _surfaceCard(BuildContext context, Widget child) => Container(
-  padding: const EdgeInsets.all(20),
+Widget _surfaceCard(BuildContext context, Widget child,
+    {EdgeInsetsGeometry padding = const EdgeInsets.all(20)}) => Container(
+  padding: padding,
   decoration: BoxDecoration(
     color: Theme.of(context).brightness == Brightness.dark
         ? const Color(0xFF21242A) : Colors.white,
@@ -246,26 +247,27 @@ class _SindreHomeState extends State<SindreHome> {
       final peers = gFFI.recentPeersModel.peers.where((peer) =>
         (peer.hostname.isNotEmpty || peer.platform.isNotEmpty) &&
         (_isPrivateLanAddress(peer.id) || RegExp(r'^[0-9]+$').hasMatch(peer.id))).toList();
-      if (peers.isEmpty) return const SizedBox.shrink();
-      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const SizedBox(height: 12),
-        Text('最近连接', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
-        for (final peer in peers)
-          Padding(padding: const EdgeInsets.only(bottom: 6),
-            child: _surfaceCard(context, ListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              leading: const Icon(Icons.history),
-              title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: Text(peer.id),
-              trailing: IconButton(tooltip: '删除记录及密码',
-                onPressed: _busy ? null : () => _removeRecentPeer(peer),
-                icon: const Icon(Icons.close, size: 18)),
-              onTap: _busy ? null : () => _connect(target: peer.id),
-            ))),
-      ]);
+      if (peers.isEmpty) return const Center(child: Text('暂无连接记录'));
+      return ListView.separated(
+        padding: const EdgeInsets.only(bottom: 4),
+        itemCount: peers.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 6),
+        itemBuilder: (context, index) {
+          final peer = peers[index];
+          return _surfaceCard(context, ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.history),
+            title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(peer.id),
+            trailing: IconButton(tooltip: '删除记录及密码',
+              onPressed: _busy ? null : () => _removeRecentPeer(peer),
+              icon: const Icon(Icons.close, size: 18)),
+            onTap: _busy ? null : () => _connect(target: peer.id),
+          ), padding: const EdgeInsets.symmetric(horizontal: 12));
+        },
+      );
     },
   );
 
@@ -273,32 +275,38 @@ class _SindreHomeState extends State<SindreHome> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Row(children: [
-        Expanded(child: Text('局域网设备', style: Theme.of(context).textTheme.titleSmall)),
-        IconButton(tooltip: '刷新设备', onPressed: _scanLan,
-          icon: const Icon(Icons.refresh, size: 20)),
+        const Spacer(),
+        TextButton.icon(onPressed: _scanLan,
+          icon: const Icon(Icons.refresh, size: 18), label: const Text('刷新设备')),
       ]),
-      AnimatedBuilder(
+      Expanded(child: AnimatedBuilder(
         animation: gFFI.lanPeersModel,
         builder: (context, _) {
+          // 同一 IP 只显示一次，不限制发现设备数量。
+          final seen = <String>{};
           final peers = gFFI.lanPeersModel.peers.where((peer) =>
-              _isPrivateIPv4(peer.ip)).take(8).toList();
-          if (peers.isEmpty) return Text('暂未发现设备', style: Theme.of(context).textTheme.bodySmall);
-          return Column(children: [
-            for (final peer in peers)
-              Padding(padding: const EdgeInsets.only(bottom: 6),
-                child: _surfaceCard(context, ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  leading: const Icon(Icons.computer_outlined),
-                  title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(peer.ip),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _busy ? null : () => _selectLanPeer(peer),
-                ))),
-          ]);
+              _isPrivateIPv4(peer.ip) && seen.add(peer.ip)).toList();
+          if (peers.isEmpty) return const Center(child: Text('暂未发现设备'));
+          return ListView.separated(
+            padding: const EdgeInsets.only(bottom: 4),
+            itemCount: peers.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (context, index) {
+              final peer = peers[index];
+              return _surfaceCard(context, ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.computer_outlined),
+                title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(peer.ip),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _busy ? null : () => _selectLanPeer(peer),
+              ), padding: const EdgeInsets.symmetric(horizontal: 12));
+            },
+          );
         },
-      ),
+      )),
     ],
   );
 
@@ -317,10 +325,9 @@ class _SindreHomeState extends State<SindreHome> {
     );
   }
 
-  Widget _client() {
+  Widget _connectionForm() {
     final border = OutlineInputBorder(borderRadius: BorderRadius.circular(8));
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      _surfaceCard(context, Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return _surfaceCard(context, Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text('连接码或 IP 地址', style: Theme.of(context).textTheme.labelLarge),
         const SizedBox(height: 8),
         TextField(controller: _id, enabled: !_busy,
@@ -346,15 +353,44 @@ class _SindreHomeState extends State<SindreHome> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
           onPressed: _busy ? null : _connect,
           child: Text(_busy ? '连接中…' : '连接设备')),
-        if (_message.isNotEmpty)
-          Padding(padding: const EdgeInsets.only(top: 10), child: Text(_message,
-            style: TextStyle(color: Theme.of(context).colorScheme.error))),
-      ])),
-      const SizedBox(height: 12),
-      _recentPanel(),
-      _lanDiscoveryPanel(),
-    ]);
+      ]), padding: const EdgeInsets.all(16));
   }
+
+  // TAB 导航固定，各页只有内容区域可滚动。
+  Widget _client() => DefaultTabController(
+    length: 3,
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const TabBar(
+        labelPadding: EdgeInsets.zero,
+        tabs: [
+          Tab(text: '连接'),
+          Tab(text: '最近连接'),
+          Tab(text: '局域网设备'),
+        ],
+      ),
+      const SizedBox(height: 10),
+      if (_message.isNotEmpty)
+        Padding(padding: const EdgeInsets.only(bottom: 8),
+          child: Text(_message, maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Theme.of(context).colorScheme.error))),
+      Expanded(child: TabBarView(children: [
+        SingleChildScrollView(child: _connectionForm()),
+        _recentPanel(),
+        _lanDiscoveryPanel(),
+      ])),
+    ]),
+  );
+
+  Widget _header(ThemeData theme) => Row(children: [
+    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(host ? '客户端（被控端）' : '控制端',
+        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 2),
+      Text(host ? '允许其他设备连接本机' : '连接其他设备',
+        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+    ])),
+    IconButton(tooltip: '设置', onPressed: _settings, icon: const Icon(Icons.settings_outlined)),
+  ]);
 
   @override
   Widget build(BuildContext context) {
@@ -384,27 +420,30 @@ class _SindreHomeState extends State<SindreHome> {
           const _LanConnectionInfo(),
         ]),
       )) : null,
-      body: SafeArea(child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-        child: Center(child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(children: [
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(host ? '客户端（被控端）' : '控制端',
-                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(host ? '允许其他设备连接本机' : '连接其他设备',
-                  style: theme.textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
-              ])),
-              IconButton(tooltip: '设置', onPressed: _settings, icon: const Icon(Icons.settings_outlined)),
-            ]),
-            const SizedBox(height: 16),
-            if (host) _surfaceCard(context, _hostDesktop()) else _client(),
-            if (host && isAndroid) const _AndroidHostPanel(),
-          ]),
-        )),
-      )),
+      body: SafeArea(child: host
+        ? SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Center(child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _header(theme),
+                const SizedBox(height: 16),
+                _surfaceCard(context, _hostDesktop()),
+                if (isAndroid) const _AndroidHostPanel(),
+              ]),
+            )),
+          )
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+            child: Center(child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _header(theme),
+                const SizedBox(height: 4),
+                Expanded(child: _client()),
+              ]),
+            )),
+          )),
     );
   }
 }
