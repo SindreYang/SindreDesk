@@ -86,7 +86,13 @@ class PrepareClientTests(unittest.TestCase):
 
     def test_host_info_independent_of_server(self):
         ui = (ROOT / "client/flutter/sindre_home.dart").read_text()
-        self.assertIn("if (host && isAndroid) const _AndroidHostPanel()", ui)
+        # Android 面板位于 Host 专属分支，Client TAB 不得包含被控入口。
+        body = ui.split("body: SafeArea(child: host", 1)[1].split("class _LanConnectionInfo", 1)[0]
+        host_body, client_body = body.split(": Padding(", 1)
+        self.assertIn("_surfaceCard(context, _hostDesktop())", host_body)
+        self.assertIn("if (isAndroid) const _AndroidHostPanel()", host_body)
+        self.assertNotIn("_AndroidHostPanel()", client_body)
+        self.assertIn("Expanded(child: _client())", client_body)
         android = ui.split("class _AndroidHostPanelState", 1)[1].split("class _ServerSettings", 1)[0]
         self.assertNotIn("configured", android)
         self.assertIn("gFFI.serverModel.fetchID();", android)
