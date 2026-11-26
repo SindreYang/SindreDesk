@@ -860,6 +860,24 @@ def android_glyph_rgba(size, scale):
     return bytes(result)
 
 
+def android_round_rgba(size):
+    # Android 7 的圆形图标单独生成，不能依赖系统裁剪普通图标。
+    glyph = android_glyph_rgba(size, 1.0)
+    result = bytearray(size * size * 4)
+    for y in range(size):
+        for x in range(size):
+            index = (y * size + x) * 4
+            # 4x4 采样圆形边缘，保证透明且抗锯齿。
+            coverage = sum((x + (i + 0.5) / 4 - size / 2) ** 2 +
+                           (y + (j + 0.5) / 4 - size / 2) ** 2 <= (size / 2) ** 2
+                           for i in range(4) for j in range(4))
+            opacity = glyph[index + 3]
+            rgb = tuple((color * (255 - opacity) + 255 * opacity) // 255
+                        for color in (22, 104, 211))
+            result[index:index + 4] = bytes((*rgb, round(255 * coverage / 16)))
+    return bytes(result)
+
+
 def patch_android_icons(source):
     """完整替换 APK 资源；自适应图标使用留白的独立透明前景。"""
     res = source / "flutter/android/app/src/main/res"
@@ -871,7 +889,8 @@ def patch_android_icons(source):
         notification_size = round(24 * factor)
         launcher = icon_png(launcher_size, icon_rgba(launcher_size))
         (directory / "ic_launcher.png").write_bytes(launcher)
-        (directory / "ic_launcher_round.png").write_bytes(launcher)
+        (directory / "ic_launcher_round.png").write_bytes(
+            icon_png(launcher_size, android_round_rgba(launcher_size)))
         (directory / "ic_launcher_foreground.png").write_bytes(
             icon_png(foreground_size, android_glyph_rgba(foreground_size, 0.80)))
         (directory / "ic_stat_logo.png").write_bytes(

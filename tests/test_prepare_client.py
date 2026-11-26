@@ -272,10 +272,13 @@ if p.cmd == "pong" {
                     self.assertEqual(struct.unpack_from(">II", png, 16),
                                      (round(size * scale), round(size * scale)))
             self.assertIn("#1668d3", (res / "values/ic_launcher_background.xml").read_text())
+        round_icon = module.android_round_rgba(48)
+        self.assertEqual(round_icon[3], 0)
+        self.assertEqual(round_icon[(24 * 48 + 24) * 4 + 3], 255)
         glyph = module.android_glyph_rgba(24, 1.0)
         self.assertIn(0, glyph[3::4])
         self.assertIn(255, glyph[3::4])
-        self.assertTrue(all(glyph[i:i+3] == b"\\xff\\xff\\xff"
+        self.assertTrue(all(glyph[i:i+3] == bytes((255, 255, 255))
                             for i in range(0, len(glyph), 4) if glyph[i+3]))
         manifest = '''android:label="RustDesk"
 android:label="RustDesk Input"
