@@ -166,11 +166,8 @@ class PrepareClientTests(unittest.TestCase):
 }'''
         result = module.patch_peer_model(source)
         self.assertIn("final String ip;", result)
-        self.assertIn("final String fingerprint;", result)
         self.assertIn("ip = json['ip'] ?? ''", result)
-        self.assertIn('"fingerprint": fingerprint', result)
         self.assertIn("ip: other.ip", result)
-        self.assertIn("fingerprint == other.fingerprint", result)
 
     def test_native_lan_security_guards(self):
         source = (ROOT / "scripts/prepare-client.py").read_text()
@@ -188,21 +185,64 @@ class PrepareClientTests(unittest.TestCase):
         self.assertIn("IpAddr::V4(ip) if ip.is_private()", source)
         self.assertIn("Config::set_option(OPTION_DIRECT_SERVER.to_owned(),", source)
         self.assertIn('Config::set_option("direct-access-port".to_owned()', source)
-        self.assertIn("fingerprint: String::new()", source)
+        self.assertIn("sindre_discovery: true", source)
         self.assertNotIn("Secure offline LAN mode is not available", source)
 
     def test_lan_peer_data_patches(self):
-        lan = '''                                    platform: whoami::platform().to_string(),
-                                    ..Default::default()
+        lan = '''p.cmd == "ping"
+cmd: "ping".to_owned()
+cmd: "pong".to_owned()
+if p.cmd == "pong" {
                                     platform: p.platform.clone(),
-                                    online: true,'''
+                                    online: true,
+    let mut peers = config::LanPeers::load().peers;
+    peers.iter_mut().for_each(|peer| {
+        peer.online = false;
+    });'''
         result = module.patch_lan(lan)
-        self.assertIn("fingerprint: String::new()", result)
-        ui = '''                ("platform", peer.platform.clone()),
-            ])'''
+        self.assertIn("sindre_discovery: true", result)
+        self.assertIn('p.cmd == "sindredesk-ping-v1"', result)
+        self.assertIn('p.cmd == "sindredesk-pong-v1" && addr.port() == get_broadcast_port()', result)
+        self.assertIn("Vec<config::DiscoveryPeer> = Vec::new()", result)
+        ui = '''pub fn discover() {
+    std::thread::spawn(move || {
+        allow_err!(crate::lan::discover());
+    });
+}
+    config::LanPeers::load()
+        .peers
+        .iter()
+        .map(|peer| {
+            HashMap::<&str, String>::from_iter([
+                ("platform", peer.platform.clone()),
+            ])
+        })'''
         result = module.patch_ui_interface(ui)
-        self.assertIn('("ip", peer.ip_mac.keys().next().cloned().unwrap_or_default())', result)
-        self.assertIn('("fingerprint", peer.fingerprint.clone())', result)
+        self.assertIn("peer.online && peer.sindre_discovery", result)
+        self.assertIn('("ip", ip.clone())', result)
+        self.assertIn("addr.is_private()", result)
+        self.assertIn("SCANNING.swap(true", result)
+
+    def test_remember_connections(self):
+        source = '''        self.remember = !config.password.is_empty();
+    } else if err == LOGIN_MSG_PASSWORD_WRONG {
+        lc.write().unwrap().password = Default::default();
+        interface.msgbox("re-input-password", err, "Do you want to enter again?", "");'''
+        result = module.patch_remember_connections(source)
+        self.assertIn("self.remember = config::is_outgoing_only()", result)
+        self.assertIn("saved.password == handler.password", result)
+        self.assertIn("saved.password.clear()", result)
+        self.assertIn("handler.save_config(saved)", result)
+        ui = (ROOT / "client/flutter/sindre_home.dart").read_text(encoding="utf-8")
+        self.assertIn("bind.mainLoadRecentPeers()", ui)
+        self.assertIn("gFFI.recentPeersModel", ui)
+        self.assertIn("最近连接", ui)
+        self.assertEqual(ui.count("Widget _client()"), 1)
+        self.assertEqual(ui.count("Widget _lanDiscoveryPanel()"), 1)
+        self.assertEqual(ui.count("Widget _recentPanel()"), 1)
+        self.assertIn("bind.mainRemovePeer(id: peer.id)", ui)
+        self.assertIn("_connect(target: peer.ip)", ui)
+        self.assertIn("password: password.isEmpty ? null : password", ui)
 
     def test_desktop_icon_format(self):
         import struct

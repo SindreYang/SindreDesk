@@ -105,6 +105,7 @@ class _SindreHomeState extends State<SindreHome> {
   final _password = TextEditingController();
   Timer? _timer;
   Timer? _lanScanTimer;
+  Timer? _recentTimer;
   bool _busy = false;
   bool _showPassword = false;
   String _lanStatus = 'unavailable';
@@ -130,6 +131,8 @@ class _SindreHomeState extends State<SindreHome> {
     }
     if (!host) {
       _scanLan();
+      bind.mainLoadRecentPeers();
+      _recentTimer = Timer.periodic(const Duration(seconds: 4), (_) => bind.mainLoadRecentPeers());
       _lanScanTimer = Timer.periodic(const Duration(seconds: 15), (_) => _scanLan());
     }
     if (host && isDesktop) {
@@ -147,6 +150,7 @@ class _SindreHomeState extends State<SindreHome> {
     _id.dispose();
     _password.dispose();
     _lanScanTimer?.cancel();
+    _recentTimer?.cancel();
     _lanStatusTimer?.cancel();
     super.dispose();
   }
@@ -179,19 +183,23 @@ class _SindreHomeState extends State<SindreHome> {
 
   void _scanLan() {
     if (!mounted || host) return;
-    bind.mainLoadLanPeers();
     bind.mainDiscover();
   }
 
   void _selectLanPeer(Peer peer) {
     if (_busy || !_isPrivateIPv4(peer.ip)) return;
-    setState(() { _id.text = peer.ip; _message = ''; });
+    unawaited(_connect(target: peer.ip));
   }
 
-  Future<void> _connect() async {
+  Future<void> _connect({String? target}) async {
     if (_busy) return;
-    final id = _id.text.replaceAll(' ', '').trim();
-    final password = _password.text;
+    final id = (target ?? _id.text).replaceAll(' ', '').trim();
+    // 点击设备时读取对应设备的原生凭据，不误用其他设备密码。
+    final password = target == null ? _password.text : '';
+    if (target != null) {
+      _id.text = id;
+      _password.clear();
+    }
     final direct = _isPrivateLanAddress(id);
     if (!direct && !RegExp(r'^[0-9]+$').hasMatch(id)) {
       setState(() => _message = '请输入连接码或局域网 IP 地址');
@@ -201,20 +209,65 @@ class _SindreHomeState extends State<SindreHome> {
       setState(() => _message = '使用连接码前请在右上角配置服务器');
       return;
     }
-    if (password.isEmpty) {
-      setState(() => _message = '请输入连接密码');
-      return;
-    }
+    // 留空时由原生会话读取已保存凭据，首次连接则弹出密码输入框。
     setState(() { _busy = true; _message = ''; });
     try {
       _password.clear();
-      await connect(context, direct ? _lanIp(id) : id, password: password);
+      await connect(context, direct ? _lanIp(id) : id,
+        password: password.isEmpty ? null : password);
     } catch (_) {
       if (mounted) setState(() => _message = '连接失败，请检查对方设备及连接信息');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<void> _removeRecentPeer(Peer peer) async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(context: context, builder: (context) =>
+      AlertDialog(title: const Text('删除连接记录？'),
+        content: const Text('将同时删除该设备已保存的密码。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('删除')),
+        ]));
+    if (confirmed != true || !mounted) return;
+    try {
+      await bind.mainRemovePeer(id: peer.id);
+      if (mounted) bind.mainLoadRecentPeers();
+    } catch (_) {
+      if (mounted) setState(() => _message = '删除连接记录失败');
+    }
+  }
+
+  Widget _recentPanel() => AnimatedBuilder(
+    animation: gFFI.recentPeersModel,
+    builder: (_, __) {
+      final peers = gFFI.recentPeersModel.peers.where((peer) =>
+        (peer.hostname.isNotEmpty || peer.platform.isNotEmpty) &&
+        (_isPrivateLanAddress(peer.id) || RegExp(r'^[0-9]+$').hasMatch(peer.id))).toList();
+      if (peers.isEmpty) return const SizedBox.shrink();
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 12),
+        Text('最近连接', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        for (final peer in peers)
+          Padding(padding: const EdgeInsets.only(bottom: 6),
+            child: _surfaceCard(context, ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: const Icon(Icons.history),
+              title: Text(peer.hostname.isEmpty ? peer.id : peer.hostname,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(peer.id),
+              trailing: IconButton(tooltip: '删除记录及密码',
+                onPressed: _busy ? null : () => _removeRecentPeer(peer),
+                icon: const Icon(Icons.close, size: 18)),
+              onTap: _busy ? null : () => _connect(target: peer.id),
+            ))),
+      ]);
+    },
+  );
 
   Widget _lanDiscoveryPanel() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -282,7 +335,7 @@ class _SindreHomeState extends State<SindreHome> {
         TextField(controller: _password, enabled: !_busy,
           obscureText: !_showPassword, autocorrect: false, enableSuggestions: false,
           textInputAction: TextInputAction.done, onSubmitted: (_) => _connect(),
-          decoration: InputDecoration(hintText: '输入对方设备密码', isDense: true, border: border,
+          decoration: InputDecoration(hintText: '输入密码（已保存可留空）', isDense: true, border: border,
             suffixIcon: IconButton(tooltip: _showPassword ? '隐藏密码' : '显示密码',
               onPressed: () => setState(() => _showPassword = !_showPassword),
               icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20)))),
@@ -298,6 +351,7 @@ class _SindreHomeState extends State<SindreHome> {
             style: TextStyle(color: Theme.of(context).colorScheme.error))),
       ])),
       const SizedBox(height: 12),
+      _recentPanel(),
       _lanDiscoveryPanel(),
     ]);
   }
