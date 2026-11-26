@@ -80,7 +80,7 @@ def patch_config(text, role):
     text = replace_once(text, 'pub const RELAY_PORT: i32 = 21117;',
         f'pub const RELAY_PORT: i32 = 21117;\npub const SINDRE_LAN_DIRECT_PORT: u16 = {LAN_DIRECT_PORT};\npub const SINDRE_LAN_DISCOVERY_PORT: u16 = {LAN_DISCOVERY_PORT};')
     text = replace_once(text, "pub struct DiscoveryPeer {",
-        'pub struct DiscoveryPeer {\n    #[serde(default, deserialize_with = "deserialize_string")]\n    pub fingerprint: String,')
+        'pub struct DiscoveryPeer {\n    #[serde(default)]\n    pub sindre_discovery: bool,')
     return text
 
 
@@ -560,27 +560,95 @@ def patch_lan_status_ffi(text):
 
 
 def patch_lan(text):
-    return replace_once(text,
+    # 发现协议与原版 RustDesk 隔离，旧缓存不作为发现结果。
+    text = replace_once(text, 'p.cmd == "ping"', 'p.cmd == "sindredesk-ping-v1"')
+    text = replace_once(text, 'cmd: "ping".to_owned()', 'cmd: "sindredesk-ping-v1".to_owned()')
+    text = replace_once(text, 'cmd: "pong".to_owned()', 'cmd: "sindredesk-pong-v1".to_owned()')
+    text = replace_once(text, 'if p.cmd == "pong" {', 'if p.cmd == "sindredesk-pong-v1" && addr.port() == get_broadcast_port() {')
+    text = replace_once(text,
         '''                                    platform: p.platform.clone(),
                                     online: true,''',
         '''                                    platform: p.platform.clone(),
-                                    fingerprint: String::new(),
+                                    sindre_discovery: true,
                                     online: true,''')
+    return replace_once(text,
+        '''    let mut peers = config::LanPeers::load().peers;
+    peers.iter_mut().for_each(|peer| {
+        peer.online = false;
+    });''',
+        '    let mut peers: Vec<config::DiscoveryPeer> = Vec::new();')
 
 
 def patch_ui_interface(text):
+    text = replace_once(text,
+        '''    config::LanPeers::load()
+        .peers
+        .iter()
+        .map(|peer| {
+            HashMap::<&str, String>::from_iter([''',
+        '''    config::LanPeers::load()
+        .peers
+        .iter()
+        .filter(|peer| peer.online && peer.sindre_discovery)
+        .flat_map(|peer| peer.ip_mac.keys().filter_map(move |ip| {
+            if !ip.parse::<std::net::Ipv4Addr>().map_or(false, |addr| addr.is_private()) {
+                return None;
+            }
+            Some(HashMap::<&str, String>::from_iter([''')
+    text = replace_once(text,
+        '''                ("platform", peer.platform.clone()),
+            ])
+        })''',
+        '''                ("platform", peer.platform.clone()),
+                ("ip", ip.clone()),
+            ]))
+        }))''')
     return replace_once(text,
-        '''                ("platform", peer.platform.clone()),
-            ])''',
-        '''                ("platform", peer.platform.clone()),
-                ("ip", peer.ip_mac.keys().next().cloned().unwrap_or_default()),
-                ("fingerprint", peer.fingerprint.clone()),
-            ])''')
+        '''pub fn discover() {
+    std::thread::spawn(move || {
+        allow_err!(crate::lan::discover());
+    });
+}''',
+        '''pub fn discover() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SCANNING: AtomicBool = AtomicBool::new(false);
+    if SCANNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    std::thread::spawn(move || {
+        allow_err!(crate::lan::discover());
+        SCANNING.store(false, Ordering::Release);
+    });
+}''')
+
+
+def patch_remember_connections(text):
+    # 原生 handle_peer_info 在认证成功后才持久化加盐密码哈希。
+    text = replace_once(text,
+        '        self.remember = !config.password.is_empty();',
+        '        self.remember = config::is_outgoing_only() || !config.password.is_empty();')
+    return replace_once(text,
+        '''    } else if err == LOGIN_MSG_PASSWORD_WRONG {
+        lc.write().unwrap().password = Default::default();
+        interface.msgbox("re-input-password", err, "Do you want to enter again?", "");''',
+        '''    } else if err == LOGIN_MSG_PASSWORD_WRONG {
+        {
+            let mut handler = lc.write().unwrap();
+            let mut saved = handler.load_config();
+            if config::is_outgoing_only() && !saved.password.is_empty()
+                && saved.password == handler.password {
+                saved.password.clear();
+                handler.save_config(saved);
+            }
+            handler.password = Default::default();
+        }
+        interface.msgbox("re-input-password", err, "Do you want to enter again?", "");''')
+
 
 
 def patch_peer_model(text):
-    text = replace_once(text, '  final String id;\n', '  final String id;\n  final String ip;\n  final String fingerprint;\n')
-    text = replace_once(text, "      : id = json['id'] ?? '',\n", "      : id = json['id'] ?? '',\n        ip = json['ip'] ?? '',\n        fingerprint = json['fingerprint'] ?? '',\n")
+    text = replace_once(text, '  final String id;\n', '  final String id;\n  final String ip;\n')
+    text = replace_once(text, "      : id = json['id'] ?? '',\n", "      : id = json['id'] ?? '',\n        ip = json['ip'] ?? '',\n")
     text = replace_once(text,
         '''    return <String, dynamic>{
       "id": id,
@@ -588,11 +656,10 @@ def patch_peer_model(text):
         '''    return <String, dynamic>{
       "id": id,
       "ip": ip,
-      "fingerprint": fingerprint,
       "hash": hash,''')
-    text = replace_once(text, '    required this.id,\n', "    required this.id,\n    this.ip = '',\n    this.fingerprint = '',\n")
-    text = replace_once(text, '    return id == other.id &&\n', '    return id == other.id &&\n        ip == other.ip &&\n        fingerprint == other.fingerprint &&\n')
-    return replace_once(text, '        id: other.id,\n', '        id: other.id,\n        ip: other.ip,\n        fingerprint: other.fingerprint,\n')
+    text = replace_once(text, '    required this.id,\n', "    required this.id,\n    this.ip = '',\n")
+    text = replace_once(text, '    return id == other.id &&\n', '    return id == other.id &&\n        ip == other.ip &&\n')
+    return replace_once(text, '        id: other.id,\n', '        id: other.id,\n        ip: other.ip,\n')
 
 
 def patch_common(text):
@@ -865,6 +932,7 @@ pub async fn create_tcp_connection(''')
 def prepare(source, role):
     patch(source / "libs/hbb_common/src/config.rs", lambda s: patch_config(s, role))
     patch(source / "src/client.rs", patch_client)
+    patch(source / "src/client.rs", patch_remember_connections)
     patch(source / "src/client/io_loop.rs", patch_lan_trust_session)
     patch(source / "src/flutter_ffi.rs", patch_lan_trust_ffi)
     shutil.copy2(ROOT / "client/native/sindre_trust.rs", source / "src/sindre_trust.rs")
