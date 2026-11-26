@@ -82,29 +82,25 @@ jobs:
           name: sindredesk-ffi-bridge
           path: upstream/client/bridge/
           if-no-files-found: error
-  build:
+  build_windows:
     needs: bridge
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
         role: [host, client]
-        platform: [linux, windows, android]
+        platform: [windows]
         include:
-          - platform: linux
-            os: ubuntu-24.04
           - platform: windows
             os: windows-2022
-          - platform: android
-            os: ubuntu-24.04
     name: ${{ matrix.platform }} / ${{ matrix.role }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
-    defaults:
+    defaults: &client_build_defaults
       run:
         shell: bash
         working-directory: upstream/${{ matrix.role }}
-    steps:
+    steps: &client_build_steps
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -330,9 +326,27 @@ jobs:
             SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}.apk
             SindreDesk${{ matrix.role == 'host' && 'Host' || 'Client' }}-TEST-SIGNING.txt
           if-no-files-found: error
+  build_other:
+    needs: build_windows
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        role: [host, client]
+        platform: [linux, android]
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+          - platform: android
+            os: ubuntu-24.04
+    name: ${{ matrix.platform }} / ${{ matrix.role }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults: *client_build_defaults
+    steps: *client_build_steps
   publish:
     name: Publish verified client packages
-    needs: build
+    needs: [build_windows, build_other]
     runs-on: ubuntu-latest
     permissions:
       contents: write

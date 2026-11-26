@@ -297,6 +297,21 @@ class PrepareClientTests(unittest.TestCase):
                             ("host-settings.svg", "基于SindreDesk研发--开源且免费")):
             self.assertIn(label, (ROOT / "docs/images" / name).read_text(encoding="utf-8"))
 
+    def test_windows_build_priority(self):
+        workflow = (ROOT / ".github/workflows/client-build-verify.yml").read_text(encoding="utf-8")
+        windows = workflow.split("  build_windows:\n", 1)[1].split("  build_other:\n", 1)[0]
+        other = workflow.split("  build_other:\n", 1)[1].split("  publish:\n", 1)[0]
+        publish = workflow.split("  publish:\n", 1)[1]
+        self.assertIn("needs: bridge", windows)
+        self.assertIn("role: [host, client]", windows)
+        self.assertIn("platform: [windows]", windows)
+        self.assertIn("max-parallel: 2", windows)
+        self.assertIn("steps: &client_build_steps", windows)
+        self.assertIn("needs: build_windows", other)
+        self.assertIn("platform: [linux, android]", other)
+        self.assertIn("steps: *client_build_steps", other)
+        self.assertIn("needs: [build_windows, build_other]", publish)
+
     def test_workflow_release_only(self):
         paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
         self.assertEqual([p.name for p in paths], ["client-build-verify.yml", "server.yml"])
