@@ -232,7 +232,7 @@ class _LiteHomeState extends State<LiteHome> with WidgetsBindingObserver {
     final status = _connecting ? '连接中' : _online ? '在线' : '离线';
     final color = _connecting ? Colors.orange : _online ? Colors.green : Colors.red;
     return Scaffold(
-      appBar: AppBar(title: const Text('远程协助'), centerTitle: true, automaticallyImplyLeading: false),
+      appBar: AppBar(title: const Text('在一起'), centerTitle: true, automaticallyImplyLeading: false),
       body: SafeArea(child: Padding(padding: const EdgeInsets.all(20), child: Column(
         children: [
           if (!active && !pending)

@@ -12,6 +12,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# Import after environment dependency setup.
+from importlib import import_module
+
 ROOT = Path(__file__).resolve().parent
 REV = "6c578292e8ebbbec708b76986ba8c4bc7c509747"
 
@@ -110,6 +113,10 @@ def main():
             text = replace_once(text, '<application', '<application android:allowBackup="false"')
         return text
     patch(src/"flutter/android/app/src/main/AndroidManifest.xml", manifest)
+    # Brand patch lives in android/ so only Android input changes.
+    import sys
+    sys.path.insert(0, str(ROOT / "android"))
+    import_module("branding").apply(src, ROOT / "android/icon.webp")
     print("Android 候选源码已生成；必须完成 FFI、Rust、Flutter 构建和真机安全验收。")
 
 if __name__ == "__main__":
