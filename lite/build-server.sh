@@ -12,4 +12,4 @@ mkdir -p "$root/dist"
 cd "$root/lite/server"
 go mod download github.com/mattn/go-sqlite3
 CGO_ENABLED=1 go test ./...
-CGO_ENABLED=1 go build -trimpath -ldflags='-s -w -linkmode external -extldflags "-static"' -o "$root/dist/SindreDeskLiteServer" .
+CGO_ENABLED=1 go build -trimpath -ldflags='-s -w -linkmode external -extldflags "-static"' -o "$root/dist/SindreDeskLiteServer-linux-x64" .

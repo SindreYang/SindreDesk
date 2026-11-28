@@ -32,10 +32,11 @@ func publicKey(dir string) (string, error) {
 }
 
 func stateDir() (string, error) {
-    if p := os.Getenv("SINDREDESK_DATA_DIR"); p != "" { return filepath.Abs(p) }
-    p, err := os.UserConfigDir()
+    p, err := os.Executable()
     if err != nil { return "", err }
-    return filepath.Join(p, "sindredesk-lite"), nil
+    p, err = filepath.EvalSymlinks(p)
+    if err != nil { return "", err }
+    return filepath.Join(filepath.Dir(p), "SindreDeskLiteData"), nil
 }
 
 func extract(dir, name string) (string, error) {

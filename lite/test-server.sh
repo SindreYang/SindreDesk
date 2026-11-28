@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-bin="$root/dist/SindreDeskLiteServer"
 tmp=$(mktemp -d)
+mkdir -p "$tmp/portable" "$tmp/other-cwd"
+bin="$tmp/portable/SindreDeskLiteServer-linux-x64"
+cp "$root/dist/SindreDeskLiteServer-linux-x64" "$bin"
+chmod 755 "$bin"
+cd "$tmp/other-cwd"
 pid=""
 cleanup() {
   if [[ -n "$pid" ]]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" || true; fi
@@ -10,11 +14,11 @@ cleanup() {
   rm -rf "$tmp"
 }
 trap cleanup EXIT
-export SINDREDESK_DATA_DIR="$tmp/state"
+data="$tmp/portable/SindreDeskLiteData"
 export SINDREDESK_PUBLIC_IP=127.0.0.1
 export SINDREDESK_RELAY=127.0.0.1:22117
 url=https://127.0.0.1:22120
-cert="$SINDREDESK_DATA_DIR/api.crt"
+cert="$data/api.crt"
 start() {
   "$bin" >"$tmp/server.log" 2>&1 &
   pid=$!
@@ -45,6 +49,8 @@ code() {
   python3 -c 'import json,re,sys; v=json.load(sys.stdin)["code"]; assert re.fullmatch("[0-9]{4}",v); print(v)'
 }
 start
+[[ -f "$data/devices.db" && ! -e "$tmp/other-cwd/SindreDeskLiteData" ]]
+[[ "$(stat -c %a "$data")" == 700 ]]
 key=$("$bin" key)
 fingerprint=$(sha256sum "$cert")
 a=$(openssl rand -hex 32)
