@@ -2,11 +2,14 @@
 构建前需提供已安装 Lite 服务端的真实公钥和 API 证书，禁止使用占位密钥。
 """
 import base64
+import hashlib
+import ipaddress
 import json
 import re
 import shutil
+import ssl
 import subprocess
-import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -33,14 +36,22 @@ def run(*args):
     subprocess.run(args, check=True)
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("用法: python lite/prepare-android.py /path/server-public-key.txt /path/api.crt")
-    key = Path(sys.argv[1]).read_text().strip()
+    # 配置文件只保存客户端可公开使用的信任信息，不包含任何服务端私钥。
+    settings = json.loads((ROOT / "android/server.json").read_text(encoding="utf-8"))
+    ip = str(ipaddress.IPv4Address(settings["ip"]))
+    key = settings["rustdesk_key"].strip()
     if len(base64.b64decode(key, validate=True)) != 32:
         raise ValueError("无效 RustDesk 服务端公钥")
-    cert = Path(sys.argv[2]).read_text().strip()
-    if not cert.startswith("-----BEGIN CERTIFICATE-----") or not cert.endswith("-----END CERTIFICATE-----"):
-        raise ValueError("无效 TLS PEM")
+    cert = settings["tls_certificate"].strip() + "\n"
+    if not cert.startswith("-----BEGIN CERTIFICATE-----") or cert.count("-----BEGIN") != 1 or not cert.strip().endswith("-----END CERTIFICATE-----"):
+        raise ValueError("无效 TLS 公共证书")
+    der = ssl.PEM_cert_to_DER_cert(cert)
+    if hashlib.sha256(der).hexdigest() != settings["tls_sha256"].lower():
+        raise ValueError("TLS 证书指纹不一致")
+    with tempfile.TemporaryDirectory() as directory:
+        pem = Path(directory) / "api.crt"
+        pem.write_text(cert, encoding="ascii")
+        run("openssl", "verify", "-CAfile", str(pem), "-verify_ip", ip, "-purpose", "sslserver", str(pem))
     src = ROOT / "upstream"
     if src.exists():
         raise RuntimeError("工作树已存在，请先备份并删除后重新生成")
@@ -53,9 +64,9 @@ def main():
         text, n = re.subn(r'^    pub static ref APP_NAME: RwLock<String> = [^;]+;', '    pub static ref APP_NAME: RwLock<String> = RwLock::new("SindreDeskLite".to_owned());', text, flags=re.M)
         if n != 1:
             raise RuntimeError("APP_NAME anchor")
-        text = replace_fn(text, "get_rendezvous_server", '        "43.138.240.23:22116".to_owned()')
+        text = replace_fn(text, "get_rendezvous_server", f'        "{ip}:22116".to_owned()')
         text = replace_fn(text, "get_rendezvous_servers", '        vec![Self::get_rendezvous_server()]')
-        text, n = re.subn(r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;', 'pub const RENDEZVOUS_SERVERS: &[&str] = &["43.138.240.23:22116"];', text, flags=re.M)
+        text, n = re.subn(r'^pub const RENDEZVOUS_SERVERS: &\[&str\] = [^;]+;', f'pub const RENDEZVOUS_SERVERS: &[&str] = &["{ip}:22116"];', text, flags=re.M)
         if n != 1:
             raise RuntimeError("RENDEZVOUS_SERVERS anchor")
         return text
@@ -87,7 +98,7 @@ def main():
     dest.mkdir()
     shutil.copy(ROOT/"android/lite_home.dart", dest/"lite_home.dart")
     (dest/"lite_config.dart").write_text(
-        "const liteServerIp = '43.138.240.23';\n"
+        f"const liteServerIp = {json.dumps(ip)};\n"
         f"const liteServerKey = {json.dumps(key)};\n"
         f"const liteCertificate = {json.dumps(cert)};\n", encoding="utf-8")
     patch(src/"flutter/android/app/build.gradle", lambda t: replace_once(t, 'applicationId "com.carriez.flutter_hbb"', 'applicationId "com.sindre.desk.lite"\n        ndk { abiFilters "arm64-v8a" }'))
