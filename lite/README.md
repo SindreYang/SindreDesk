@@ -33,3 +33,6 @@ sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskL
 python lite/prepare-android.py server-public-key.txt api.crt
 ```
 生成 `lite/upstream`，独立包名 `com.sindre.desk.lite`。当前实现首页两个 Tab、四位固定码、受信 TLS 健康检查、右下角在线状态、原生连接和停止共享调用。保留 Android 系统授权及原生点击确认。候选源码需要按原版 Android ARM64 编译链构建并验证，尚不能发布；特别需验证服务启动前 RustDesk key 配置、ID 所有权、授权弹窗、后台强制结束入口与远程输入竞态。
+
+## CI 开发验证
+现有 Server CI 工作流为 Lite PR 增加两个独立验证任务：Linux x64 编译、真实进程集成及 systemd 安装；Android ARM64 上游补丁、静态分析及 APK 编译。仅 Linux 开发包作为短期 artifact 上传，不发布 Release，不使用真实服务端密钥，Android 临时信任配置不可用于公网实际连接。原版 release 任务只在 release 时运行。通过 CI 不代表完成真机或安全验收。

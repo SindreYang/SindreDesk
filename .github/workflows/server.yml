@@ -2,6 +2,12 @@ name: Server CI
 on:
   release:
     types: [published]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'lite/**'
+      - '.github/workflows/server.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -9,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
+    if: github.event_name == 'release'
     name: Unit tests, static checks and Linux x64 build
     runs-on: ubuntu-latest
     defaults:
@@ -39,6 +46,7 @@ jobs:
             exit 1
           fi
   integration:
+    if: github.event_name == 'release'
     name: Linux x64 server integration
     needs: test
     runs-on: ubuntu-latest
@@ -65,6 +73,7 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
   publish:
+    if: github.event_name == 'release'
     name: Publish verified server package
     needs: integration
     runs-on: ubuntu-latest
@@ -88,3 +97,161 @@ jobs:
           # 保留内部二进制校验文件，发布包哈希仅记录于 Actions 日志。
           sha256sum SindreDeskServer-linux-x64.tar.gz
           gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz --repo "$GH_REPO" --clobber
+
+  lite_server:
+    name: Lite / Linux x64 build and integration
+    if: github.event_name != 'release'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: lite/server/go.mod
+          cache: false
+      - name: Build embedded server and run tests
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl --fail --location --retry 3 https://github.com/rustdesk/rustdesk-server/releases/download/1.1.16/rustdesk-server-linux-amd64.zip -o "$tmp/server.zip"
+          printf '%s  %s\n' 0565c41affe6c3f409b0bddfaf5a24ccbf3f64f5f8e3fec250b69a0d5f6bdbcf "$tmp/server.zip" | sha256sum -c -
+          unzip -q "$tmp/server.zip" -d "$tmp/unpacked"
+          hbbs=$(find "$tmp/unpacked" -type f -name hbbs -print)
+          hbbr=$(find "$tmp/unpacked" -type f -name hbbr -print)
+          chmod +x "$hbbs" "$hbbr"
+          bash lite/build-server.sh "$hbbs" "$hbbr"
+          cd lite/server
+          CGO_ENABLED=1 go test -race ./...
+          CGO_ENABLED=1 go vet ./...
+      - name: Verify Linux single-file executable
+        run: |
+          file dist/SindreDeskLiteServer
+          if readelf -l dist/SindreDeskLiteServer | grep -q 'INTERP'; then
+            echo 'Wrapper must be static'; exit 1
+          fi
+          bash lite/test-server.sh
+      - name: Test installation and systemd startup
+        run: |
+          set -euo pipefail
+          sudo ./dist/SindreDeskLiteServer install
+          trap 'sudo journalctl -u sindredesk-lite --no-pager -n 80; sudo systemctl stop sindredesk-lite || true' EXIT
+          for i in $(seq 1 100); do
+            if sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskLiteServer status; then break; fi
+            sleep .25
+          done
+          sudo systemctl is-active sindredesk-lite
+          sudo systemctl is-enabled sindredesk-lite
+          sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskLiteServer status
+          sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskLiteServer key
+          sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskLiteServer cert > "$RUNNER_TEMP/lite-public.crt"
+          test -s "$RUNNER_TEMP/lite-public.crt"
+      - name: Package development binary
+        run: |
+          cd dist
+          sha256sum SindreDeskLiteServer > SHA256SUMS
+          tar -czf SindreDeskLiteServer-linux-x64-dev.tar.gz SindreDeskLiteServer SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SindreDeskLiteServer-linux-x64-dev
+          path: dist/SindreDeskLiteServer-linux-x64-dev.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  lite_android:
+    name: Lite / Android ARM64 compile
+    if: github.event_name != 'release'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Prepare Android candidate with disposable CI trust
+        run: |
+          set -euo pipefail
+          # Do not use real server secrets or trust material in PR builds.
+          openssl rand -base64 32 > "$RUNNER_TEMP/lite-key.txt"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj '/CN=CI only' -addext 'subjectAltName=IP:43.138.240.23' -keyout "$RUNNER_TEMP/lite-test-private.pem" -out "$RUNNER_TEMP/lite-test.crt"
+          rm -f "$RUNNER_TEMP/lite-test-private.pem"
+          python -m py_compile lite/prepare-android.py
+          python lite/prepare-android.py "$RUNNER_TEMP/lite-key.txt" "$RUNNER_TEMP/lite-test.crt"
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake curl libclang-dev llvm-dev nasm ninja-build pkg-config libgtk-3-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: "1.75"
+          components: rustfmt
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: "3.22.3"
+          channel: stable
+      - name: Generate Rust Flutter bridge
+        working-directory: lite/upstream
+        run: |
+          cargo install cargo-expand --version 1.0.95 --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          sed -i 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
+          (cd flutter && flutter pub get)
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+      - name: Analyze candidate UI
+        working-directory: lite/upstream
+        run: |
+          sed -i 's/extended_text: 13.0.0/extended_text: 14.0.0/g' flutter/pubspec.yaml
+          sdk=$(dirname "$(dirname "$(command -v flutter)")")
+          git -C "$sdk" apply "$PWD/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          cd flutter
+          flutter pub get
+          dart analyze lib/sindre_lite
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: ndk
+        with:
+          ndk-version: r28c
+          add-to-path: true
+      - name: Install vcpkg
+        run: |
+          root="$RUNNER_TEMP/sindre-vcpkg"
+          git clone --no-checkout https://github.com/microsoft/vcpkg.git "$root"
+          git -C "$root" checkout 120deac3062162151622ca4860575a33844ba10b
+          bash "$root/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+      - name: Compile Android ARM64
+        working-directory: lite/upstream
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android
+          bash flutter/build_android_deps.sh arm64-v8a
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android21 --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          cargo install cargo-ndk --version 3.1.2 --locked
+          bash flutter/ndk_arm64.sh
+          jni=flutter/android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$jni"
+          cp target/aarch64-linux-android/release/liblibrustdesk.so "$jni/librustdesk.so"
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$jni/"
+          sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
+          sed -i 's/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g' flutter/android/gradle.properties
+          cd flutter
+          flutter build apk --release --target-platform android-arm64
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$tools/apksigner" verify "$apk"
+          "$tools/aapt" dump badging "$apk" | grep -F "package: name='com.sindre.desk.lite'"
+          python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
+          # CI trust is intentionally unusable with the real server; do not upload APK.
+          sha256sum "$apk"
