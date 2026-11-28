@@ -19,7 +19,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-DynamicUser=yes
+User=sindredesk-lite
+Group=sindredesk-lite
 StateDirectory=sindredesk-lite
 StateDirectoryMode=0700
 Environment=SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite
@@ -43,6 +44,12 @@ func installService()error{
  source,err:=os.Executable();if err!=nil{return err}
  in,err:=os.Open(source);if err!=nil{return err};defer in.Close()
  if err=os.MkdirAll(filepath.Dir(binPath),0755);err!=nil{return err}
+ if _,err=exec.LookPath("useradd");err!=nil{return err}
+ if err=exec.Command("id","-u","sindredesk-lite").Run();err!=nil{
+   cmd:=exec.Command("useradd","--system","--user-group","--no-create-home","--shell","/usr/sbin/nologin","sindredesk-lite")
+   cmd.Stdout=os.Stdout;cmd.Stderr=os.Stderr
+   if err=cmd.Run();err!=nil{return err}
+ }
  out,err:=os.OpenFile(binPath,os.O_CREATE|os.O_EXCL|os.O_WRONLY,0755);if err!=nil{return err}
  _,copyErr:=io.Copy(out,in);closeErr:=out.Close()
  if copyErr!=nil||closeErr!=nil{os.Remove(binPath);return errors.Join(copyErr,closeErr)}

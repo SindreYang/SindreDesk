@@ -87,7 +87,9 @@ func run() error {
         }
         if !errors.Is(err, syscall.EWOULDBLOCK) { return err }
         if !portsReady() { return errors.New("服务进程存在，但 TCP 端口未就绪") }
-        fmt.Println("服务运行中；TCP 22115–22117 可达（非协议认证测试）")
+        conn, err := net.DialTimeout("tcp", "127.0.0.1:22120", time.Second)
+        if err != nil { return errors.New("设备码 HTTPS 端口未就绪") }; conn.Close()
+        fmt.Println("服务运行中；TCP 22115–22117 / 22120 可达（非协议认证测试）")
         return nil
     }
     if len(os.Args) != 1 { return errors.New("用法: SindreDeskLiteServer [key|cert|status]") }

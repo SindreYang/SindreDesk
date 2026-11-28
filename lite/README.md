@@ -26,4 +26,10 @@ sudo env SINDREDESK_DATA_DIR=/var/lib/sindredesk-lite /usr/local/bin/SindreDeskL
 停止服务后备份整个 /var/lib/sindredesk-lite（含 SQLite WAL/SHM、RustDesk 数据、密钥及 API TLS 证书），安全复制到新服务器，恢复数据目录和权限后启动。不要泄露私钥或设备令牌。安装命令拒绝覆盖现有服务；升级、恢复命令待实现。
 
 ## 状态
-此提交仅实现服务端初版及测试源码，尚未构建验收或部署。Android 一体化、设备身份绑定、权限引导、本地强制断开及签名配置热更新仍待实现；不提供可用 APK，也不允许以 4 位码作为唯一认证。正式发布前必须真机验收及安全审查。
+已增加 Android 双向控制候选 UI、设备码 API 客户端和上游补丁生成脚本；尚未构建验收或部署。设备身份绑定、权限引导、原生本地强制断开及签名配置热更新仍需完善；不提供可用 APK，也不允许以 4 位码作为唯一认证。正式发布前必须真机验收及安全审查。
+
+## Android 候选源码
+```bash
+python lite/prepare-android.py server-public-key.txt api.crt
+```
+生成 `lite/upstream`，独立包名 `com.sindre.desk.lite`。当前实现首页两个 Tab、四位固定码、受信 TLS 健康检查、右下角在线状态、原生连接和停止共享调用。保留 Android 系统授权及原生点击确认。候选源码需要按原版 Android ARM64 编译链构建并验证，尚不能发布；特别需验证服务启动前 RustDesk key 配置、ID 所有权、授权弹窗、后台强制结束入口与远程输入竞态。
