@@ -4,8 +4,13 @@ package main
 
 import (
     "context"
+    "crypto/sha256"
+    "crypto/x509"
     "embed"
     "encoding/base64"
+    "encoding/hex"
+    "encoding/json"
+    "encoding/pem"
     "errors"
     "fmt"
     "log"
@@ -29,6 +34,41 @@ func publicKey(dir string) (string, error) {
     raw, err := base64.StdEncoding.DecodeString(key)
     if err != nil || len(raw) != 32 { return "", errors.New("服务端公钥格式无效") }
     return key, nil
+}
+
+// serverInfo 仅导出客户端连接所需的公开信息。证书 SAN 是配置的 IP，不代表公网探测结果。
+func serverInfo(dir string) error {
+    key, err := publicKey(dir)
+    if err != nil { return fmt.Errorf("请先启动服务生成公钥: %w", err) }
+    certPEM, err := os.ReadFile(filepath.Join(dir, "api.crt"))
+    if err != nil { return fmt.Errorf("请先启动服务生成 HTTPS 证书: %w", err) }
+    block, _ := pem.Decode(certPEM)
+    if block == nil || block.Type != "CERTIFICATE" { return errors.New("HTTPS 公共证书格式无效") }
+    cert, err := x509.ParseCertificate(block.Bytes)
+    if err != nil { return err }
+    if len(cert.IPAddresses) != 1 { return errors.New("HTTPS 证书必须包含一个明确的服务端 IP") }
+    ip := cert.IPAddresses[0].String()
+    digest := sha256.Sum256(cert.Raw)
+    info := struct {
+        IP string `json:"ip"`
+        IDServer string `json:"id_server"`
+        RelayServer string `json:"relay_server_default"`
+        APIURL string `json:"api_url"`
+        RustDeskKey string `json:"rustdesk_key"`
+        TLSCertificate string `json:"tls_certificate"`
+        TLSSHA256 string `json:"tls_sha256"`
+    }{
+        IP: ip,
+        IDServer: net.JoinHostPort(ip, "22116"),
+        RelayServer: net.JoinHostPort(ip, "22117"),
+        APIURL: "https://" + net.JoinHostPort(ip, "22120"),
+        RustDeskKey: key,
+        TLSCertificate: string(certPEM),
+        TLSSHA256: hex.EncodeToString(digest[:]),
+    }
+    encoder := json.NewEncoder(os.Stdout)
+    encoder.SetIndent("", "  ")
+    return encoder.Encode(info)
 }
 
 func stateDir() (string, error) {
@@ -68,6 +108,7 @@ func run() error {
     info, err := os.Lstat(dir)
     if err != nil { return err }
     if !info.IsDir() || info.Mode().Perm() & 0077 != 0 { return errors.New("数据目录必须为非符号链接且权限为 0700 或更严格") }
+    if len(os.Args) == 2 && os.Args[1] == "info" { return serverInfo(dir) }
     if len(os.Args) == 2 && os.Args[1] == "cert" {
         b, err := os.ReadFile(filepath.Join(dir, "api.crt")); if err != nil { return err }; fmt.Print(string(b)); return nil
     }
@@ -93,7 +134,7 @@ func run() error {
         fmt.Println("服务运行中；TCP 22115–22117 / 22120 可达（非协议认证测试）")
         return nil
     }
-    if len(os.Args) != 1 { return errors.New("用法: SindreDeskLiteServer [key|cert|status]") }
+    if len(os.Args) != 1 { return errors.New("用法: SindreDeskLiteServer [info|key|cert|status]") }
     lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
     if err != nil { return err }
     defer lock.Close()

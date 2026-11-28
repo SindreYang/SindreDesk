@@ -8,12 +8,11 @@ bash lite/build-server.sh /path/to/hbbs /path/to/hbbr
 sudo ./dist/SindreDeskLiteServer-linux-x64 install
 sudo systemctl status sindredesk-lite
 sudo journalctl -u sindredesk-lite -n 50
-sudo ./dist/SindreDeskLiteServer-linux-x64 key
-sudo ./dist/SindreDeskLiteServer-linux-x64 cert
+sudo ./dist/SindreDeskLiteServer-linux-x64 info
 ```
 构建需要 Go 1.23、C 编译器、静态 C 库；部署不需要 Go 或独立数据库。服务固定 43.138.240.23，默认 TCP 22115–22117、UDP 22116、HTTPS TCP 22120。上游 hbbs/hbbr 同时使用 22118/22119 WebSocket 监听，不将它们用于设备码 API，无需对外开放。不同公网 IP 需设置 SINDREDESK_RELAY（含端口）及 SINDREDESK_PUBLIC_IP 后重新建立可信 TLS 配置。
 
-首次启动生成 RustDesk 公钥及设备 API TLS 证书。APP 必须预置可信 RustDesk 公钥和 API 证书/信任锚，不得关闭证书验证。当前自签证书与 IP 绑定，迁移需规划证书轮换，不能只改 IP。
+首次启动生成 RustDesk 公钥及设备 API TLS 证书。`info` 一次输出 JSON：证书 SAN 中的配置 IP、ID 服务地址、默认中继地址、HTTPS URL、RustDesk 公钥、公开 TLS 证书及 DER SHA256 指纹。它不探测公网 IP，不显示任何私钥；若使用自定义中继环境变量，应以实际服务配置为准。仍可单独使用 `key` 和 `cert`。APP 必须预置可信 RustDesk 公钥和 API 证书/信任锚，不得关闭证书验证。当前自签证书与 IP 绑定，迁移需规划证书轮换，不能只改 IP。
 
 ## API
 - GET /health：数据库与本机远控端口就绪（非端到端验证）。

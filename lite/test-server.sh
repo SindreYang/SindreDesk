@@ -53,6 +53,23 @@ start
 [[ "$(stat -c %a "$data")" == 700 ]]
 key=$("$bin" key)
 fingerprint=$(sha256sum "$cert")
+"$bin" info > "$tmp/info.json"
+python3 - "$tmp/info.json" "$cert" "$key" <<'PY'
+import hashlib, json, ssl, sys
+with open(sys.argv[1]) as f:
+    info = json.load(f)
+with open(sys.argv[2]) as f:
+    cert = f.read()
+assert set(info) == {"ip", "id_server", "relay_server_default", "api_url", "rustdesk_key", "tls_certificate", "tls_sha256"}
+assert info["ip"] == "127.0.0.1"
+assert info["id_server"] == "127.0.0.1:22116"
+assert info["relay_server_default"] == "127.0.0.1:22117"
+assert info["api_url"] == "https://127.0.0.1:22120"
+assert info["rustdesk_key"] == sys.argv[3]
+assert info["tls_certificate"] == cert
+assert info["tls_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert)).hexdigest()
+assert "PRIVATE KEY" not in json.dumps(info)
+PY
 a=$(openssl rand -hex 32)
 b=$(openssl rand -hex 32)
 c1=$(post "$a" register '{"rustdesk_id":"123456789"}' | code)
@@ -68,6 +85,8 @@ if "$bin" status; then echo '停止后错误报告在线'; exit 1; fi
 start
 [[ "$("$bin" key)" == "$key" ]]
 [[ "$(sha256sum "$cert")" == "$fingerprint" ]]
+"$bin" info > "$tmp/info-restart.json"
+cmp "$tmp/info.json" "$tmp/info-restart.json"
 [[ "$(post "$a" register '{"rustdesk_id":"123456789"}' | code)" == "$c1" ]]
 [[ "$(post "$b" register '{"rustdesk_id":"987654321"}' | code)" == "$c2" ]]
 stop
