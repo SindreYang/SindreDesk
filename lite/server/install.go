@@ -63,8 +63,6 @@ func installService() error {
     if err != nil { return err }
     executable, err := unitQuote(source)
     if err != nil { return err }
-    working, err := unitQuote(filepath.Dir(source))
-    if err != nil { return err }
     writable, err := unitQuote(dir)
     if err != nil { return err }
     account, err := serviceAccount(info)
@@ -97,7 +95,6 @@ Wants=network-online.target
 Type=simple
 User=%d
 Group=%d
-WorkingDirectory=%s
 ExecStart=%s
 ReadWritePaths=%s
 Restart=on-failure
@@ -109,7 +106,7 @@ UMask=0077
 
 [Install]
 WantedBy=multi-user.target
-`, uid, gid, working, executable, writable)
+`, uid, gid, executable, writable)
     f, err := os.OpenFile(unitPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
     if err != nil { return err }
     _, writeErr := f.WriteString(unit)
@@ -118,8 +115,27 @@ WantedBy=multi-user.target
         os.Remove(unitPath)
         return errors.Join(writeErr, closeErr)
     }
-    if err = systemctl("daemon-reload"); err != nil { return err }
-    if err = systemctl("enable", "--now", "sindredesk-lite.service"); err != nil { return err }
+    // 服务使用程序绝对路径，子进程自行设置数据目录，不依赖 WorkingDirectory。
+    verify := exec.Command("systemd-analyze", "verify", unitPath)
+    verify.Stdout, verify.Stderr = os.Stdout, os.Stderr
+    if err = verify.Run(); err != nil {
+        os.Remove(unitPath)
+        return fmt.Errorf("systemd 配置校验失败: %w", err)
+    }
+    if err = systemctl("daemon-reload"); err != nil {
+        os.Remove(unitPath)
+        return err
+    }
+    if err = systemctl("enable", "--now", "sindredesk-lite.service"); err != nil {
+        systemctl("status", "--no-pager", "sindredesk-lite.service")
+        journal := exec.Command("journalctl", "-u", "sindredesk-lite.service", "--no-pager", "-n", "80")
+        journal.Stdout, journal.Stderr = os.Stdout, os.Stderr
+        _ = journal.Run()
+        _ = systemctl("disable", "--now", "sindredesk-lite.service")
+        _ = os.Remove(unitPath)
+        _ = systemctl("daemon-reload")
+        return fmt.Errorf("服务安装失败，保留数据目录: %w", err)
+    }
     fmt.Println("已注册系统服务；请使用 systemctl status sindredesk-lite 检查启动结果。")
     return nil
 }
