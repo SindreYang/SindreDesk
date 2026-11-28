@@ -2,13 +2,32 @@ name: Server CI
 on:
   release:
     types: [published]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'lite/server/**'
+      - 'lite/android/**'
+      - 'lite/prepare-android.py'
+      - 'lite/build-server.sh'
+      - 'lite/test-server.sh'
+      - 'lite/ci-plan.py'
+      - '.github/workflows/server.yml'
+  workflow_dispatch:
+    inputs:
+      lite_target:
+        description: 'Lite 验证范围'
+        type: choice
+        options: [both, server, android]
+        default: both
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: server-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   test:
+    if: github.event_name == 'release'
     name: Unit tests, static checks and Linux x64 build
     runs-on: ubuntu-latest
     defaults:
@@ -39,6 +58,7 @@ jobs:
             exit 1
           fi
   integration:
+    if: github.event_name == 'release'
     name: Linux x64 server integration
     needs: test
     runs-on: ubuntu-latest
@@ -65,6 +85,7 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
   publish:
+    if: github.event_name == 'release'
     name: Publish verified server package
     needs: integration
     runs-on: ubuntu-latest
@@ -88,3 +109,241 @@ jobs:
           # 保留内部二进制校验文件，发布包哈希仅记录于 Actions 日志。
           sha256sum SindreDeskServer-linux-x64.tar.gz
           gh release upload "$RELEASE_TAG" SindreDeskServer-linux-x64.tar.gz --repo "$GH_REPO" --clobber
+
+  lite_plan:
+    name: Lite / determine required builds
+    if: github.event_name != 'release'
+    runs-on: ubuntu-22.04
+    outputs:
+      server: ${{ steps.plan.outputs.server }}
+      android: ${{ steps.plan.outputs.android }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Reuse unchanged inputs from prior successful jobs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET: ${{ inputs.lite_target || 'both' }}
+        run: python lite/ci-plan.py
+
+  lite_server:
+    name: Lite / Linux x64 build and integration
+    needs: lite_plan
+    if: needs.lite_plan.outputs.server == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: lite/server/go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: lite-go-${{ runner.os }}-22.04-${{ hashFiles('lite/server/go.mod', 'lite/server/go.sum') }}
+          restore-keys: lite-go-${{ runner.os }}-22.04-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/sindredesk-lite/server-1.1.16.zip
+          key: lite-hbbs-hbbr-1.1.16-0565c41affe6c3f40
+      - name: Build embedded server and run tests
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$HOME/.cache/sindredesk-lite"
+          cached="$HOME/.cache/sindredesk-lite/server-1.1.16.zip"
+          if [[ ! -s "$cached" ]]; then
+            curl --fail --location --retry 3 https://github.com/rustdesk/rustdesk-server/releases/download/1.1.16/rustdesk-server-linux-amd64.zip -o "$cached"
+          fi
+          cp "$cached" "$tmp/server.zip"
+          printf '%s  %s\n' 0565c41affe6c3f409b0bddfaf5a24ccbf3f64f5f8e3fec250b69a0d5f6bdbcf "$tmp/server.zip" | sha256sum -c -
+          unzip -q "$tmp/server.zip" -d "$tmp/unpacked"
+          hbbs=$(find "$tmp/unpacked" -type f -name hbbs -print)
+          hbbr=$(find "$tmp/unpacked" -type f -name hbbr -print)
+          chmod +x "$hbbs" "$hbbr"
+          bash lite/build-server.sh "$hbbs" "$hbbr"
+          cd lite/server
+          CGO_ENABLED=1 go test -race ./...
+          CGO_ENABLED=1 go vet ./...
+      - name: Verify Linux single-file executable
+        run: |
+          file dist/SindreDeskLiteServer-linux-x64
+          if readelf -l dist/SindreDeskLiteServer-linux-x64 | grep -q 'INTERP'; then
+            echo 'Wrapper must be static'; exit 1
+          fi
+          bash lite/test-server.sh
+      - name: Test installation and systemd startup
+        run: |
+          set -euo pipefail
+          sudo ./dist/SindreDeskLiteServer-linux-x64 install
+          trap 'sudo journalctl -u sindredesk-lite --no-pager -n 80; sudo systemctl stop sindredesk-lite || true' EXIT
+          for i in $(seq 1 100); do
+            if sudo ./dist/SindreDeskLiteServer-linux-x64 status; then break; fi
+            sleep .25
+          done
+          sudo systemctl is-active sindredesk-lite
+          sudo systemctl is-enabled sindredesk-lite
+          sudo ./dist/SindreDeskLiteServer-linux-x64 status
+          sudo ./dist/SindreDeskLiteServer-linux-x64 key
+          sudo ./dist/SindreDeskLiteServer-linux-x64 cert > "$RUNNER_TEMP/lite-public.crt"
+          test -s "$RUNNER_TEMP/lite-public.crt"
+      - name: Verify portable data directory and checksum
+        run: |
+          sudo test -f dist/SindreDeskLiteData/devices.db
+          sha256sum dist/SindreDeskLiteServer-linux-x64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SindreDeskLiteServer-linux-x64
+          path: dist/SindreDeskLiteServer-linux-x64
+          if-no-files-found: error
+          retention-days: 7
+
+  lite_android:
+    name: Lite / Android ARM64 compile
+    needs: lite_plan
+    if: needs.lite_plan.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Prepare Android candidate with configured public trust
+        run: |
+          set -euo pipefail
+          python -m pip install Pillow==11.3.0
+          python -m py_compile lite/prepare-android.py lite/android/branding.py
+          python lite/prepare-android.py
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake curl libclang-dev llvm-dev nasm ninja-build pkg-config libgtk-3-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: "1.75"
+          components: rustfmt
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: "3.22.3"
+          channel: stable
+          cache: true
+          cache-key: lite-flutter-3.22.3-ubuntu22-v1
+          pub-cache-key: lite-pub-3.22.3-ubuntu22-v1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-expand
+            ~/.cargo/bin/flutter_rust_bridge_codegen
+            ~/.cargo/bin/cargo-ndk
+          key: lite-rust-tools-ubuntu22-rust1.75-expand1.0.95-frb1.80.1-ndk3.1.2-v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: lite/upstream -> target
+          key: lite-android-arm64-rust1.75-ndkr28c-vcpkg120deac3
+          cache-on-failure: false
+      - name: Generate Rust Flutter bridge
+        working-directory: lite/upstream
+        run: |
+          command -v cargo-expand >/dev/null || cargo install cargo-expand --version 1.0.95 --locked
+          command -v flutter_rust_bridge_codegen >/dev/null || cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          sed -i 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
+          (cd flutter && flutter pub get)
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+          cache: true
+          cache-key: lite-flutter-3.24.5-ubuntu22-v1
+          pub-cache-key: lite-pub-3.24.5-ubuntu22-v1
+      - name: Analyze candidate UI
+        working-directory: lite/upstream
+        run: |
+          sed -i 's/extended_text: 13.0.0/extended_text: 14.0.0/g' flutter/pubspec.yaml
+          sdk=$(dirname "$(dirname "$(command -v flutter)")")
+          patch="$PWD/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if ! git -C "$sdk" apply --reverse --check "$patch"; then git -C "$sdk" apply "$patch"; fi
+          cd flutter
+          flutter pub get
+          dart analyze lib/sindre_lite
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+          cache-dependency-path: lite/upstream/flutter/android/**/*.gradle*
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: ndk
+        with:
+          ndk-version: r28c
+          add-to-path: true
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/sindredesk-lite/vcpkg-binary
+            ~/.cache/sindredesk-lite/vcpkg-downloads
+          key: lite-vcpkg-ubuntu22-arm64-ndkr28c-120deac3-${{ hashFiles('lite/upstream/vcpkg.json', 'lite/upstream/flutter/build_android_deps.sh') }}
+          restore-keys: lite-vcpkg-ubuntu22-arm64-ndkr28c-120deac3-
+      - name: Install vcpkg
+        run: |
+          root="$RUNNER_TEMP/sindre-vcpkg"
+          git clone --no-checkout https://github.com/microsoft/vcpkg.git "$root"
+          git -C "$root" checkout 120deac3062162151622ca4860575a33844ba10b
+          bash "$root/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$HOME/.cache/sindredesk-lite/"{vcpkg-binary,vcpkg-downloads}
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$HOME/.cache/sindredesk-lite/vcpkg-binary,readwrite" >> "$GITHUB_ENV"
+          echo "VCPKG_DOWNLOADS=$HOME/.cache/sindredesk-lite/vcpkg-downloads" >> "$GITHUB_ENV"
+      - name: Compile Android ARM64
+        working-directory: lite/upstream
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android
+          bash flutter/build_android_deps.sh arm64-v8a
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android21 --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --version 3.1.2 --locked
+          bash flutter/ndk_arm64.sh
+          jni=flutter/android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$jni"
+          cp target/aarch64-linux-android/release/liblibrustdesk.so "$jni/librustdesk.so"
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$jni/"
+          sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
+          sed -i 's/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g' flutter/android/gradle.properties
+          cd flutter
+          flutter build apk --release --target-platform android-arm64
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$tools/apksigner" verify "$apk"
+          "$tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/lite-badging.txt"
+          grep -F "package: name='com.sindre.desk.lite'" "$RUNNER_TEMP/lite-badging.txt"
+          grep -F "application-label:'在一起'" "$RUNNER_TEMP/lite-badging.txt"
+          "$tools/aapt" dump xmltree "$apk" AndroidManifest.xml > "$RUNNER_TEMP/lite-manifest.txt"
+          if grep -F 'RustDesk Input' "$RUNNER_TEMP/lite-manifest.txt"; then exit 1; fi
+          python -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs={n.split("/")[1] for n in z.namelist() if n.startswith("lib/") and n.endswith(".so")}; assert libs=={"arm64-v8a"}, libs; assert "lib/arm64-v8a/librustdesk.so" in z.namelist()' "$apk"
+          # 仅供授权的真机测试，非正式发布签名。
+          mkdir -p ../../../dist
+          cp "$apk" ../../../dist/SindreDeskLite-test.apk
+          sha256sum ../../../dist/SindreDeskLite-test.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SindreDeskLite-Android-ARM64-test
+          path: dist/SindreDeskLite-test.apk
+          if-no-files-found: error
+          retention-days: 7
